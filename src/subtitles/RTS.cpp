@@ -165,6 +165,8 @@ void CWord::Transform(CPoint org)
     double yrnd = m_style.mod_rand.Y * 100;
     double zrnd = m_style.mod_rand.Z * 100;
 
+    bool ortho = m_style.mod_ortho;
+
     srand(m_style.mod_rand.Seed);
     // CPUID from VDub
     bool fSSE2 = !!(g_cpuid.m_flags & CCpuID::sse2);
@@ -310,7 +312,8 @@ void CWord::Transform(CPoint org)
                 {
                     rx[k] = xrnd > 0 ? (xrnd - rand() % (int)(xrnd * 2 + 1)) : 0;
                     ry[k] = yrnd > 0 ? (yrnd - rand() % (int)(yrnd * 2 + 1)) : 0;
-                    rz[k] = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) : 0;
+                    if(!ortho)
+                        rz[k] = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) : 0;
                 }
                 __m128 __001 = _mm_set_ps1(0.01f);
 
@@ -328,7 +331,7 @@ void CWord::Transform(CPoint org)
                     __pointy = _mm_add_ps(__pointy, __ry);
                 }
 
-                if(zrnd!=0)
+                if(zrnd!=0 && !ortho)
                 {
                     __m128 __rz = _mm_load_ps(rz);
                     __rz = _mm_mul_ps(__rz, __001);
@@ -370,36 +373,47 @@ void CWord::Transform(CPoint org)
             __xx = _mm_mul_ps(__tmpx, __saz);
             __yy = _mm_mul_ps(__tmpy, __caz);
             __pointy = _mm_sub_ps(__yy, __xx);
+            if (ortho) {// vpatch v001. Orthogonal 2D projection
+                __pointy = _mm_mul_ps(__pointy, __cax);
+                __pointx = _mm_mul_ps(__pointx, __cay);
+            }
+            else {
+                __m128 __xx = _mm_mul_ps(__tmpx, __caz);
+                __m128 __yy = _mm_mul_ps(__tmpy, __saz);
+                __pointx = _mm_add_ps(__xx, __yy);
+                __xx = _mm_mul_ps(__tmpx, __saz);
+                __yy = _mm_mul_ps(__tmpy, __caz);
+                __pointy = _mm_sub_ps(__yy, __xx);
 
-            __m128 __zz = _mm_mul_ps(__pointz, __sax);
-            __yy = _mm_mul_ps(__pointy, __cax);
-            __tmpy = __pointy;
-            __pointy = _mm_add_ps(__yy, __zz);
-            __zz = _mm_mul_ps(__pointz, __cax);
-            __yy = _mm_mul_ps(__tmpy, __sax);
-            __pointz = _mm_sub_ps(__yy, __zz);
+                __m128 __zz = _mm_mul_ps(__pointz, __sax);
+                __yy = _mm_mul_ps(__pointy, __cax);
+                __tmpy = __pointy;
+                __pointy = _mm_add_ps(__yy, __zz);
+                __zz = _mm_mul_ps(__pointz, __cax);
+                __yy = _mm_mul_ps(__tmpy, __sax);
+                __pointz = _mm_sub_ps(__yy, __zz);
 
-            __xx = _mm_mul_ps(__pointx, __cay);
-            __zz = _mm_mul_ps(__pointz, __say);
-            __tmpx = __pointx;
-            __pointx = _mm_add_ps(__xx, __zz);
-            __xx = _mm_mul_ps(__tmpx, __say);
-            __zz = _mm_mul_ps(__pointz, __cay);
-            __pointz = _mm_sub_ps(__xx, __zz);
+                __xx = _mm_mul_ps(__pointx, __cay);
+                __zz = _mm_mul_ps(__pointz, __say);
+                __tmpx = __pointx;
+                __pointx = _mm_add_ps(__xx, __zz);
+                __xx = _mm_mul_ps(__tmpx, __say);
+                __zz = _mm_mul_ps(__pointz, __cay);
+                __pointz = _mm_sub_ps(__xx, __zz);
 
-            __zz = _mm_set_ps1(-19000);
-            __pointz = _mm_max_ps(__pointz, __zz);
+                __zz = _mm_set_ps1(-19000);
+                __pointz = _mm_max_ps(__pointz, __zz);
 
-            __m128 __20000 = _mm_set_ps1(20000);
-            __zz = _mm_add_ps(__pointz, __20000);
-            __zz = _mm_rcp_ps(__zz);
+                __m128 __20000 = _mm_set_ps1(20000);
+                __zz = _mm_add_ps(__pointz, __20000);
+                __zz = _mm_rcp_ps(__zz);
 
-            __pointx = _mm_mul_ps(__pointx, __20000);
-            __pointx = _mm_mul_ps(__pointx, __zz);
+                __pointx = _mm_mul_ps(__pointx, __20000);
+                __pointx = _mm_mul_ps(__pointx, __zz);
 
-            __pointy = _mm_mul_ps(__pointy, __20000);
-            __pointy = _mm_mul_ps(__pointy, __zz);
-
+                __pointy = _mm_mul_ps(__pointy, __20000);
+                __pointy = _mm_mul_ps(__pointy, __zz);
+            }
             __pointx = _mm_add_ps(__pointx, __xorg);
             __pointy = _mm_add_ps(__pointy, __yorg);
 
@@ -481,7 +495,8 @@ void CWord::Transform(CPoint org)
             // patch m003. random text points
             x = xrnd > 0 ? (xrnd - rand() % (int)(xrnd * 2 + 1)) / 100.0 + x : x;
             y = yrnd > 0 ? (yrnd - rand() % (int)(yrnd * 2 + 1)) / 100.0 + y : y;
-            z = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) / 100.0 + z : z;
+            if(!ortho)// vpatch v001. Orthogonal 2D projection
+                z = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) / 100.0 + z : z;
 #else
             z = 0;
 #endif
@@ -489,22 +504,37 @@ void CWord::Transform(CPoint org)
             x = scalex * (x + m_style.fontShiftX * y) - org.x;
             y = scaley * (y + m_style.fontShiftY * _x) - org.y;
 
-            xx = x * caz + y * saz;
-            yy = -(x * saz - y * caz);
-            zz = z;
+            
 
-            x = xx;
-            y = yy * cax + zz * sax;
-            z = yy * sax - zz * cax;
+            if (ortho) { // vpatch v001. Orthogonal 2D projection
+                xx = x * caz + y * saz;
+                yy = -(x * saz - y * caz);
 
-            xx = x * cay + z * say;
-            yy = y;
-            zz = x * say - z * cay;
+                x = xx;
+                y = yy * cax;
 
-            zz = max(zz, -19000);
+                x = x * cay;
+                y = y;
+            }
+            else
+            {
+                xx = x * caz + y * saz;
+                yy = -(x * saz - y * caz);
+                zz = z;
 
-            x = (xx * 20000) / (zz + 20000);
-            y = (yy * 20000) / (zz + 20000);
+                x = xx;
+                y = yy * cax + zz * sax;
+                z = yy * sax - zz * cax;
+
+                xx = x * cay + z * say;
+                yy = y;
+                zz = x * say - z * cay;
+
+                zz = max(zz, -19000);
+
+                x = (xx * 20000) / (zz + 20000);
+                y = (yy * 20000) / (zz + 20000);
+            }
 
             mpPathPoints[i].x = (LONG)(x + org.x + 0.5);
             mpPathPoints[i].y = (LONG)(y + org.y + 0.5);
@@ -2029,6 +2059,8 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 #ifdef _VSMOD // patch m002. Z-coord
         else if(!cmd.Find(L"z"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
+        else if(!cmd.Find(L"ortho")) // vpatch v001. ortho
+            params.Add(cmd.Mid(5)), cmd = cmd.Left(5);
 #endif
         else
             nUnrecognizedTags++;
@@ -2965,6 +2997,13 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             double dst = wcstod(p, NULL) * 80;
             double nx = CalcAnimation(dst, style.mod_z, fAnimate);
             style.mod_z = !p.IsEmpty() ? nx : org.mod_z;
+        }
+        else if (cmd == L"ortho")// vpatch v001. Orthogonal projection
+        {
+            int n = wcstol(p, NULL, 10);
+            style.mod_ortho = !p.IsEmpty()
+                ? (n == 0 ? false : n == 1 ? true : org.mod_ortho)
+                : org.mod_ortho;
         }
 #endif
     }
