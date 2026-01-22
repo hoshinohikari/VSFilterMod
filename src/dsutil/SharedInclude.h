@@ -1,6 +1,21 @@
 #ifndef IncDSUtil_SharedInclude_h
 #define IncDSUtil_SharedInclude_h
 
+// Ensure C++ stdint/cstdint headers expose integer limit macros like PTRDIFF_MAX.
+#ifndef __STDC_LIMIT_MACROS
+#define __STDC_LIMIT_MACROS
+#endif
+
+#include <stdint.h>
+
+#ifndef PTRDIFF_MAX
+#ifdef _WIN64
+#define PTRDIFF_MAX _I64_MAX
+#else
+#define PTRDIFF_MAX _I32_MAX
+#endif
+#endif
+
 #pragma warning(disable:4018)
 #pragma warning(disable:4800)
 #pragma warning(disable:4355)
