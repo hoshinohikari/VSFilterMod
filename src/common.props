@@ -3,6 +3,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>WINVER=0x0600;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemDefinitionGroup>
 </Project>

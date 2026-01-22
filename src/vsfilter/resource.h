@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
-// Microsoft Visual C++ Éú³ÉµÄ°üº¬ÎÄ¼ş¡£
-// ¹© VSFilterMod.rc Ê¹ÓÃ
+// Microsoft Visual C++ ç”Ÿæˆçš„åŒ…å«æ–‡ä»¶ã€‚
+// ä¾› VSFilterMod.rc ä½¿ç”¨
 //
 #define VERSION_PATCH                   0
 #define VERSION_MAJOR                   1
