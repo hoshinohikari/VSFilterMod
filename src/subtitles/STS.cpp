@@ -252,7 +252,7 @@ int CharSetLen = countof(CharSetList);
 static DWORD CharSetToCodePage(DWORD dwCharSet)
 {
     CHARSETINFO cs = {0};
-    ::TranslateCharsetInfo((DWORD *)dwCharSet, &cs, TCI_SRCCHARSET);
+    ::TranslateCharsetInfo(&dwCharSet, &cs, TCI_SRCCHARSET);
     return cs.ciACP;
 }
 
@@ -3921,15 +3921,16 @@ void png_default_read_edata(png_structp png_ptr, png_bytep data, png_size_t leng
 {
     png_size_t check;
 
-    if(png_ptr->io_ptr == NULL)
+    png_voidp io_ptr = png_get_io_ptr(png_ptr);
+    if(io_ptr == NULL)
         return;
 
-    BYTE* eldata = (BYTE*)png_ptr->io_ptr;
+    BYTE* eldata = *static_cast<BYTE**>(io_ptr);
 
     // read from memory
     memcpy(data, eldata, length);
     eldata += length;
-    png_ptr->io_ptr = (png_voidp)eldata;
+    *static_cast<BYTE**>(io_ptr) = eldata;
 }
 
 bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
@@ -3957,10 +3958,10 @@ bool MOD_PNGIMAGE::processData(png_structp png_ptr)
 
     png_read_info(png_ptr, info_ptr);
 
-    width = info_ptr->width;
-    height = info_ptr->height;
-    color_type = info_ptr->color_type;
-    bit_depth = info_ptr->bit_depth;
+    width = png_get_image_width(png_ptr, info_ptr);
+    height = png_get_image_height(png_ptr, info_ptr);
+    color_type = png_get_color_type(png_ptr, info_ptr);
+    bit_depth = png_get_bit_depth(png_ptr, info_ptr);
 
     // palette
     if(color_type == PNG_COLOR_TYPE_PALETTE)
@@ -3991,10 +3992,11 @@ bool MOD_PNGIMAGE::processData(png_structp png_ptr)
     /* read file */
     if(setjmp(png_jmpbuf(png_ptr))) return false;  // Error during read_image
 
-    bpp = info_ptr->rowbytes / width;
+    png_size_t rowbytes = png_get_rowbytes(png_ptr, info_ptr);
+    bpp = static_cast<int>(rowbytes / width);
     pointer = (png_bytep*) malloc(sizeof(png_bytep) * height);
     for(int y = 0; y < height; y++)
-        pointer[y] = (png_byte*) malloc(info_ptr->rowbytes);
+        pointer[y] = (png_byte*) malloc(rowbytes);
 
     png_read_image(png_ptr, pointer);
     return true;
@@ -4049,7 +4051,7 @@ bool MOD_PNGIMAGE::initImage(BYTE* data, CString m_fn)
     png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     if(!png_ptr) return false;  // png_create_read_struct failed
 
-    png_set_read_fn(png_ptr, (png_voidp)data, &png_default_read_edata);
+    png_set_read_fn(png_ptr, (png_voidp)&data, &png_default_read_edata);
     return processData(png_ptr);
 }
 

@@ -166,7 +166,11 @@
   <ItemGroup>
     <ClInclude Include="png.h" />
     <ClInclude Include="pngconf.h" />
+    <ClInclude Include="pngdebug.h" />
+    <ClInclude Include="pnginfo.h" />
+    <ClInclude Include="pnglibconf.h" />
     <ClInclude Include="pngpriv.h" />
+    <ClInclude Include="pngstruct.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
