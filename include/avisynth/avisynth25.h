@@ -354,7 +354,11 @@ class VideoFrame {
   VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height);
   VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height, int _offsetU, int _offsetV, int _pitchUV);
 
-  void* operator new (size_t size);
+#ifndef _WIN64
+  void* operator new(unsigned size);
+#else
+  void* operator new(size_t size);
+#endif
 // TESTME: OFFSET U/V may be switched to what could be expected from AVI standard!
 public:
   int GetPitch() const { return pitch; }
@@ -444,7 +448,11 @@ public:
   virtual void __stdcall GetAudio(void* buf, __int64 start, __int64 count, IScriptEnvironment* env) = 0;  // start and count are in samples
   virtual void __stdcall SetCacheHints(int cachehints,int frame_range) = 0 ;  // We do not pass cache requests upwards, only to the next filter.
   virtual const VideoInfo& __stdcall GetVideoInfo() = 0;
+#if defined(__INTEL_COMPILER)
   virtual ~IClip() {}
+#else
+  virtual __stdcall ~IClip() {}
+#endif
 };
 
 
@@ -708,7 +716,11 @@ class IClipLocalStorage;
 
 class IScriptEnvironment {
 public:
+#if defined(__INTEL_COMPILER)
   virtual ~IScriptEnvironment() {}
+#else
+  virtual __stdcall ~IScriptEnvironment() {}
+#endif
 
   virtual /*static*/ long __stdcall GetCPUFlags() = 0;
 

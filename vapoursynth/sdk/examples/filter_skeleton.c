@@ -4,33 +4,29 @@
 // With no changes it simply passes
 // frames through.
 
-#include "VapourSynth.h"
-#include "VSHelper.h"
+#include "VapourSynth4.h"
+#include "VSHelper4.h"
 
 typedef struct {
-    VSNodeRef *node;
+    VSNode *node;
     const VSVideoInfo *vi;
 } FilterData;
 
-static void VS_CC filterInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-    FilterData *d = (FilterData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
-}
 
-static const VSFrameRef *VS_CC filterGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    FilterData *d = (FilterData *) * instanceData;
+static const VSFrame *VS_CC filterGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    FilterData *d = (FilterData *)instanceData;
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
-        const VSFrameRef *frame = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *frame = vsapi->getFrameFilter(n, d->node, frameCtx);
 
-        // your code here...
+        /* your code here... */
 
         return frame;
     }
 
-    return 0;
+    return NULL;
 }
 
 static void VS_CC filterFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
@@ -43,19 +39,20 @@ static void VS_CC filterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     FilterData d;
     FilterData *data;
 
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
-    data = malloc(sizeof(d));
+    data = (FilterData *)malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Filter", filterInit, filterGetFrame, filterFree, fmParallel, 0, data, core);
+    VSFilterDependency deps[] = {{d.node, rpGeneral}}; /* Depending the the request patterns you may want to change this */
+    vsapi->createVideoFilter(out, "Filter", data->vi, filterGetFrame, filterFree, fmParallel, deps, 1, data, core);
 }
 
 //////////////////////////////////////////
 // Init
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
-    configFunc("com.example.filter", "filter", "VapourSynth Filter Skeleton", VAPOURSYNTH_API_VERSION, 1, plugin);
-    registerFunc("Filter", "clip:clip;", filterCreate, 0, plugin);
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
+    vspapi->configPlugin("com.example.filter", "filter", "VapourSynth Filter Skeleton", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->registerFunction("Filter", "clip:vnode;", "clip:vnode;", filterCreate, NULL, plugin);
 }
