@@ -29,6 +29,7 @@
 #include "systray.h"
 #include "..\DSUtil\MediaTypes.h"
 #include "..\SubPic\MemSubPic.h"
+#include "..\subtitles\SubtitleHelpers.h"
 
 #include <initguid.h>
 #include <moreuuids.h>
@@ -130,6 +131,7 @@ STDMETHODIMP CDirectVobSubFilter::NonDelegatingQueryInterface(REFIID riid, void*
     return
         QI(IDirectVobSub)
         QI(IDirectVobSub2)
+        QI(IDirectVobSub3)
         QI(IFilterVersion)
         QI(ISpecifyPropertyPages)
         QI(IAMStreamSelect)
@@ -1398,8 +1400,8 @@ bool CDirectVobSubFilter::Open()
         if(!path.IsEmpty()) paths.Add(path);
     }
 
-    CAtlArray<SubFile> ret;
-    GetSubFileNames(m_FileName, paths, ret);
+    CAtlArray<Subtitle::SubFile> ret;
+    Subtitle::GetSubFileNames(m_FileName, paths, ret);
 
     for(ptrdiff_t i = 0; i < ret.GetCount(); i++)
     {

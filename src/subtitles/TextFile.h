@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include <afx.h>
+#include "StdioFile64.h"
 
-class CTextFile : protected CStdioFile
+class CTextFile : protected CStdioFile64
 {
 public:
     typedef enum {ASCII, UTF8, LE16, BE16, ANSI} enc;

@@ -169,14 +169,17 @@
       <AssemblerOutput Condition="'$(Configuration)|$(Platform)'=='Debug (MOD)|x64'">AssemblyAndSourceCode</AssemblerOutput>
     </ClCompile>
     <ClCompile Include="RealTextParser.cpp" />
+    <ClCompile Include="RenderingCache.cpp" />
     <ClCompile Include="RenderedHdmvSubtitle.cpp" />
     <ClCompile Include="RTS.cpp" />
+    <ClCompile Include="StdioFile64.cpp" />
     <ClCompile Include="SSF.cpp">
       <AssemblerOutput Condition="'$(Configuration)|$(Platform)'=='Release (MOD)|Win32'">AssemblyAndSourceCode</AssemblerOutput>
       <AssemblerOutput Condition="'$(Configuration)|$(Platform)'=='Debug (MOD)|Win32'">AssemblyAndSourceCode</AssemblerOutput>
       <AssemblerOutput Condition="'$(Configuration)|$(Platform)'=='Release (MOD)|x64'">AssemblyAndSourceCode</AssemblerOutput>
       <AssemblerOutput Condition="'$(Configuration)|$(Platform)'=='Debug (MOD)|x64'">AssemblyAndSourceCode</AssemblerOutput>
     </ClCompile>
+    <ClCompile Include="ColorConvTable.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release (MOD)|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug (MOD)|Win32'">Create</PrecompiledHeader>
@@ -184,6 +187,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug (MOD)|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="STS.cpp" />
+    <ClCompile Include="SubtitleHelpers.cpp" />
     <ClCompile Include="SubtitleInputPin.cpp" />
     <ClCompile Include="TextFile.cpp" />
     <ClCompile Include="USFSubtitles.cpp" />
@@ -199,20 +203,24 @@
     <ClInclude Include="GFN.h" />
     <ClInclude Include="HdmvSub.h" />
     <ClInclude Include="OverlayMix.h" />
+    <ClInclude Include="RenderingCache.h" />
     <ClInclude Include="Rasterizer.h" />
     <ClInclude Include="RealTextParser.h" />
     <ClInclude Include="RenderedHdmvSubtitle.h" />
     <ClInclude Include="RTS.h" />
     <ClInclude Include="SeparableFilter.h" />
     <ClInclude Include="SSF.h" />
+    <ClInclude Include="StdioFile64.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="STS.h" />
+    <ClInclude Include="SubtitleHelpers.h" />
     <ClInclude Include="SubtitleInputPin.h" />
     <ClInclude Include="TextFile.h" />
     <ClInclude Include="USFSubtitles.h" />
     <ClInclude Include="VobSubFile.h" />
     <ClInclude Include="VobSubFileRipper.h" />
     <ClInclude Include="VobSubImage.h" />
+    <ClInclude Include="ColorConvTable.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

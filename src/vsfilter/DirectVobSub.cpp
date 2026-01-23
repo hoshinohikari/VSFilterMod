@@ -61,6 +61,11 @@ CDirectVobSub::CDirectVobSub()
     m_ZoomRect.right = m_ZoomRect.bottom = 1;
 
     m_fForced = false;
+
+    m_bDisableSubtitleAnimation = false;
+    m_nRenderAtWhenAnimationIsDisabled = 50;
+    m_nAnimationRate = 100;
+    m_bAllowDroppingSubpic = true;
 }
 
 CDirectVobSub::~CDirectVobSub()
@@ -638,6 +643,80 @@ STDMETHODIMP CDirectVobSub::put_AspectRatioSettings(CSimpleTextSubtitle::EPARCom
 
     m_ePARCompensationType = *ePARCompensationType;
 
+    return S_OK;
+}
+
+// IDirectVobSub3
+
+STDMETHODIMP_(bool) CDirectVobSub::get_DisableSubtitleAnimation()
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return m_bDisableSubtitleAnimation;
+}
+
+STDMETHODIMP CDirectVobSub::put_DisableSubtitleAnimation(bool bDisableSubtitleAnimation)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    if(m_bDisableSubtitleAnimation == bDisableSubtitleAnimation)
+        return S_FALSE;
+
+    m_bDisableSubtitleAnimation = bDisableSubtitleAnimation;
+    return S_OK;
+}
+
+STDMETHODIMP_(int) CDirectVobSub::get_RenderAtWhenAnimationIsDisabled()
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return m_nRenderAtWhenAnimationIsDisabled;
+}
+
+STDMETHODIMP CDirectVobSub::put_RenderAtWhenAnimationIsDisabled(int nRenderAtWhenAnimationIsDisabled)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    if(m_nRenderAtWhenAnimationIsDisabled == nRenderAtWhenAnimationIsDisabled)
+        return S_FALSE;
+
+    m_nRenderAtWhenAnimationIsDisabled = nRenderAtWhenAnimationIsDisabled;
+    return S_OK;
+}
+
+STDMETHODIMP_(int) CDirectVobSub::get_AnimationRate()
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return m_nAnimationRate;
+}
+
+STDMETHODIMP CDirectVobSub::put_AnimationRate(int nAnimationRate)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    if(m_nAnimationRate == nAnimationRate)
+        return S_FALSE;
+
+    m_nAnimationRate = nAnimationRate;
+    return S_OK;
+}
+
+STDMETHODIMP_(bool) CDirectVobSub::get_AllowDroppingSubpic()
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return m_bAllowDroppingSubpic;
+}
+
+STDMETHODIMP CDirectVobSub::put_AllowDroppingSubpic(bool bAllowDroppingSubpic)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    if(m_bAllowDroppingSubpic == bAllowDroppingSubpic)
+        return S_FALSE;
+
+    m_bAllowDroppingSubpic = bAllowDroppingSubpic;
     return S_OK;
 }
 

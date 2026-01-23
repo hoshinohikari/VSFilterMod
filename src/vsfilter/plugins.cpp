@@ -364,7 +364,7 @@ public:
 
         /* off encoding changing */
 #ifndef _DEBUG
-        const TCHAR formats[] = _T("TextSub files (*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.txt)|*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.txt||");
+        const TCHAR formats[] = _T("TextSub files (*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.vtt;*.txt)|*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.vtt;*.txt||");
         CFileDialog fd(TRUE, NULL, GetFileName(), OFN_EXPLORER | OFN_ENABLESIZING | OFN_HIDEREADONLY | OFN_ENABLETEMPLATE | OFN_ENABLEHOOK,
                        formats, CWnd::FromHandle((HWND)hwnd), sizeof(OPENFILENAME));
         //OPENFILENAME_SIZE_VERSION_400 /*0*/);
@@ -375,7 +375,7 @@ public:
         fd.m_pOFN->lpfnHook = (LPOFNHOOKPROC)OpenHookProc;
         fd.m_pOFN->lCustData = (LPARAM)DEFAULT_CHARSET;
 #else
-        const TCHAR formats[] = _T("TextSub files (*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.txt)|*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.txt||");
+        const TCHAR formats[] = _T("TextSub files (*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.vtt;*.txt)|*.sub;*.srt;*.smi;*.ssa;*.ass;*.xss;*.psb;*.vtt;*.txt||");
         CFileDialog fd(TRUE, NULL, GetFileName(), OFN_ENABLESIZING | OFN_HIDEREADONLY,
                        formats, CWnd::FromHandle((HWND)hwnd), sizeof(OPENFILENAME));
 #endif
@@ -1180,11 +1180,11 @@ namespace VapourSynth {
 		const VSFilterData* d;
 
 	public:
-		~VSFRGBBuf()
-		{
-			if (tmp)
+        ~VSFRGBBuf()
+        {
+            if (tmp)
                 free(tmp);
-		}
+        }
 
         VSFRGBBuf(const VSAPI* api, VSCore *core, const VSFilterData* d, const VSFrame* frame)
 			: api(api), d(d)
@@ -1192,34 +1192,34 @@ namespace VapourSynth {
             tmpStride = d->vi->width * 4;
             tmp = static_cast<uint8_t*>(malloc(tmpStride * d->vi->height));
 
-			const int srcStride = api->getStride(frame, 0);
-			const uint8_t * srcpR = api->getReadPtr(frame, 0);
-			const uint8_t * srcpG = api->getReadPtr(frame, 1);
-			const uint8_t * srcpB = api->getReadPtr(frame, 2);
+            const int srcStride = api->getStride(frame, 0);
+            const uint8_t * srcpR = api->getReadPtr(frame, 0);
+            const uint8_t * srcpG = api->getReadPtr(frame, 1);
+            const uint8_t * srcpB = api->getReadPtr(frame, 2);
             uint8_t * VS_RESTRICT tmpp = tmp;
 
-			tmpp += tmpStride * (d->vi->height - 1);
+            tmpp += tmpStride * (d->vi->height - 1);
 
-			for (int y = 0; y < d->vi->height; y++) {
-				for (int x = 0; x < d->vi->width; x++) {
-					tmpp[x * 4] = srcpB[x];
-					tmpp[x * 4 + 1] = srcpG[x];
-					tmpp[x * 4 + 2] = srcpR[x];
-					tmpp[x * 4 + 3] = 0ui8;
-				}
+            for (int y = 0; y < d->vi->height; y++) {
+                for (int x = 0; x < d->vi->width; x++) {
+                    tmpp[x * 4] = srcpB[x];
+                    tmpp[x * 4 + 1] = srcpG[x];
+                    tmpp[x * 4 + 2] = srcpR[x];
+                    tmpp[x * 4 + 3] = 0ui8;
+                }
 
-				srcpR += srcStride;
-				srcpG += srcStride;
-				srcpB += srcStride;
-				tmpp -= tmpStride;
-			}
+                srcpR += srcStride;
+                srcpG += srcStride;
+                srcpB += srcStride;
+                tmpp -= tmpStride;
+            }
 
-			subpic.w = d->vi->width;
-			subpic.h = d->vi->height;
-			subpic.pitch = tmpStride;
+            subpic.w = d->vi->width;
+            subpic.h = d->vi->height;
+            subpic.pitch = tmpStride;
             subpic.bits = tmp;
-			subpic.bpp = 32;
-			subpic.type = MSP_RGB32;
+            subpic.bpp = 32;
+            subpic.type = MSP_RGB32;
 		}
 
         void WriteTo(VSFrame* frame) override
@@ -1387,19 +1387,19 @@ namespace VapourSynth {
         vspapi->configPlugin("com.holywu.vsfiltermod", "vsfm", "VSFilterMod", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
         vspapi->registerFunction("TextSubMod",
                              "clip:vnode;"
-                     "file:data;"
-                     "charset:int:opt;"
-                     "fps:float:opt;"
-                     "vfr:data:opt;"
-                     "accurate:int:opt;",
+                             "file:data;"
+                             "charset:int:opt;"
+                             "fps:float:opt;"
+                             "vfr:data:opt;"
+                             "accurate:int:opt;",
                              "clip:vnode;",
-                     vsfilterCreate, const_cast<char *>("TextSubMod"), plugin);
+                             vsfilterCreate, const_cast<char *>("TextSubMod"), plugin);
         vspapi->registerFunction("VobSub",
                              "clip:vnode;"
-                     "file:data;"
-                     "accurate:int:opt;",
+                             "file:data;"
+                             "accurate:int:opt;",
                              "clip:vnode;",
-                     vsfilterCreate, const_cast<char *>("VobSub"), plugin);
+                             vsfilterCreate, const_cast<char *>("VobSub"), plugin);
     }
 }
 

@@ -24,7 +24,7 @@
 #include "IDirectVobSub.h"
 #include <IFilterVersion.h>
 
-class CDirectVobSub : public IDirectVobSub2, public IFilterVersion
+class CDirectVobSub : public IDirectVobSub3, public IFilterVersion
 {
 protected:
     CDirectVobSub();
@@ -56,6 +56,11 @@ protected:
 
     CComPtr<ISubClock> m_pSubClock;
     bool m_fForced;
+
+    bool m_bDisableSubtitleAnimation;
+    int m_nRenderAtWhenAnimationIsDisabled;
+    int m_nAnimationRate;
+    bool m_bAllowDroppingSubpic;
 
 public:
 
@@ -126,6 +131,17 @@ public:
     STDMETHODIMP put_TextSettings(STSStyle* pDefStyle);
     STDMETHODIMP get_AspectRatioSettings(CSimpleTextSubtitle::EPARCompensationType* ePARCompensationType);
     STDMETHODIMP put_AspectRatioSettings(CSimpleTextSubtitle::EPARCompensationType* ePARCompensationType);
+
+    // IDirectVobSub3
+
+    STDMETHODIMP_(bool) get_DisableSubtitleAnimation();
+    STDMETHODIMP put_DisableSubtitleAnimation(bool bDisableSubtitleAnimation);
+    STDMETHODIMP_(int) get_RenderAtWhenAnimationIsDisabled();
+    STDMETHODIMP put_RenderAtWhenAnimationIsDisabled(int nRenderAtWhenAnimationIsDisabled);
+    STDMETHODIMP_(int) get_AnimationRate();
+    STDMETHODIMP put_AnimationRate(int nAnimationRate);
+    STDMETHODIMP_(bool) get_AllowDroppingSubpic();
+    STDMETHODIMP put_AllowDroppingSubpic(bool bAllowDroppingSubpic);
 
     // IFilterVersion
 

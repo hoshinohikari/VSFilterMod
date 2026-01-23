@@ -22,6 +22,7 @@
 
 #include "stdafx.h"
 #include "CompositionObject.h"
+#include "ColorConvTable.h"
 #include "..\DSUtil\GolombBuffer.h"
 
 
@@ -50,10 +51,8 @@ void CompositionObject::SetPalette(int nNbEntry, HDMV_PALETTE* pPalette, bool bI
     {
 //		if (pPalette[i].T != 0)	// Prevent ugly background when Alpha=0 (but RGB different from 0)
         {
-            if(bIsHD)
-                m_Colors[pPalette[i].entry_id] = YCrCbToRGB_Rec709(pPalette[i].T, pPalette[i].Y, pPalette[i].Cr, pPalette[i].Cb);
-            else
-                m_Colors[pPalette[i].entry_id] = YCrCbToRGB_Rec601(pPalette[i].T, pPalette[i].Y, pPalette[i].Cr, pPalette[i].Cb);
+            const ColorConvTable::YuvMatrixType matrix = bIsHD ? ColorConvTable::BT709 : ColorConvTable::BT601;
+            m_Colors[pPalette[i].entry_id] = ColorConvTable::A8Y8U8V8_TO_ARGB(pPalette[i].T, pPalette[i].Y, pPalette[i].Cb, pPalette[i].Cr, matrix);
         }
 //		TRACE_HDMVSUB ("%03d : %08x\n", pPalette[i].entry_id, m_Colors[pPalette[i].entry_id]);
     }
@@ -137,7 +136,7 @@ void CompositionObject::RenderHdmv(SubPicDesc& spd)
 
             if(nCount > 0)
             {
-                if(nPaletteIndex != 0xFF)		// Fully transparent (§9.14.4.2.2.1.1)
+                if(nPaletteIndex != 0xFF)		// Fully transparent (ï¿½9.14.4.2.2.1.1)
                     FillSolidRect(spd, nX, nY, nCount, 1, m_Colors[nPaletteIndex]);
                 nX += nCount;
             }

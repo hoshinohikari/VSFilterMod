@@ -25,6 +25,7 @@
 #include "RTS.h"
 #include "SSF.h"
 #include "RenderedHdmvSubtitle.h"
+#include "STS.h"
 
 #include <initguid.h>
 #include <moreuuids.h>
@@ -54,12 +55,25 @@ CSubtitleInputPin::CSubtitleInputPin(CBaseFilter* pFilter, CCritSec* pLock, CCri
     , m_pSubLock(pSubLock)
 {
     m_bCanReconnectWhenActive = TRUE;
+    m_decodeThread = std::thread([this]() {
+        DecodeSamples();
+    });
+}
+
+CSubtitleInputPin::~CSubtitleInputPin()
+{
+    m_bExitDecodingThread = m_bStopDecoding = true;
+    m_condQueueReady.notify_one();
+    if(m_decodeThread.joinable())
+    {
+        m_decodeThread.join();
+    }
 }
 
 HRESULT CSubtitleInputPin::CheckMediaType(const CMediaType* pmt)
 {
     return pmt->majortype == MEDIATYPE_Text && (pmt->subtype == MEDIASUBTYPE_NULL || pmt->subtype == FOURCCMap((DWORD)0))
-           || pmt->majortype == MEDIATYPE_Subtitle && pmt->subtype == MEDIASUBTYPE_UTF8
+           || pmt->majortype == MEDIATYPE_Subtitle && (pmt->subtype == MEDIASUBTYPE_UTF8 || pmt->subtype == MEDIASUBTYPE_WEBVTT)
            || pmt->majortype == MEDIATYPE_Subtitle && (pmt->subtype == MEDIASUBTYPE_SSA || pmt->subtype == MEDIASUBTYPE_ASS || pmt->subtype == MEDIASUBTYPE_ASS2)
            || pmt->majortype == MEDIATYPE_Subtitle && pmt->subtype == MEDIASUBTYPE_SSF
            || pmt->majortype == MEDIATYPE_Subtitle && (pmt->subtype == MEDIASUBTYPE_VOBSUB)
@@ -71,6 +85,8 @@ HRESULT CSubtitleInputPin::CheckMediaType(const CMediaType* pmt)
 
 HRESULT CSubtitleInputPin::CompleteConnect(IPin* pReceivePin)
 {
+    InvalidateSamples();
+
     if(m_mt.majortype == MEDIATYPE_Text)
     {
         if(!(m_pSubStream = DNew CRenderedTextSubtitle(m_pSubLock))) return E_FAIL;
@@ -96,7 +112,8 @@ HRESULT CSubtitleInputPin::CompleteConnect(IPin* pReceivePin)
             if(wcslen(psi->TrackName) > 0) name += _T(" (") + CString(psi->TrackName) + _T(")");
         }
 
-        if(m_mt.subtype == MEDIASUBTYPE_UTF8
+          if(m_mt.subtype == MEDIASUBTYPE_UTF8
+              || m_mt.subtype == MEDIASUBTYPE_WEBVTT
            /*|| m_mt.subtype == MEDIASUBTYPE_USF*/
            || m_mt.subtype == MEDIASUBTYPE_SSA
            || m_mt.subtype == MEDIASUBTYPE_ASS
@@ -155,6 +172,8 @@ HRESULT CSubtitleInputPin::CompleteConnect(IPin* pReceivePin)
 
 HRESULT CSubtitleInputPin::BreakConnect()
 {
+    InvalidateSamples();
+
     RemoveSubStream(m_pSubStream);
     m_pSubStream = NULL;
 
@@ -167,6 +186,8 @@ STDMETHODIMP CSubtitleInputPin::ReceiveConnection(IPin* pConnector, const AM_MED
 {
     if(m_Connected)
     {
+        InvalidateSamples();
+
         RemoveSubStream(m_pSubStream);
         m_pSubStream = NULL;
 
@@ -181,9 +202,12 @@ STDMETHODIMP CSubtitleInputPin::NewSegment(REFERENCE_TIME tStart, REFERENCE_TIME
 {
     CAutoLock cAutoLock(&m_csReceive);
 
+    InvalidateSamples();
+
     if(m_mt.majortype == MEDIATYPE_Text
        || m_mt.majortype == MEDIATYPE_Subtitle
        && (m_mt.subtype == MEDIASUBTYPE_UTF8
+           || m_mt.subtype == MEDIASUBTYPE_WEBVTT
            /*|| m_mt.subtype == MEDIASUBTYPE_USF*/
            || m_mt.subtype == MEDIASUBTYPE_SSA
            || m_mt.subtype == MEDIASUBTYPE_ASS
@@ -230,29 +254,164 @@ public IUnknown
 
 STDMETHODIMP CSubtitleInputPin::Receive(IMediaSample* pSample)
 {
-    HRESULT hr;
-
-    hr = __super::Receive(pSample);
+    HRESULT hr = __super::Receive(pSample);
     if(FAILED(hr)) return hr;
 
     CAutoLock cAutoLock(&m_csReceive);
 
     REFERENCE_TIME tStart, tStop;
-    pSample->GetTime(&tStart, &tStop);
-    tStart += m_tStart;
-    tStop += m_tStart;
+    hr = pSample->GetTime(&tStart, &tStop);
+
+    switch(hr)
+    {
+    case S_OK:
+        tStart += m_tStart;
+        tStop += m_tStart;
+        break;
+    case VFW_S_NO_STOP_TIME:
+        tStart += m_tStart;
+        tStop = INVALID_TIME;
+        break;
+    case VFW_E_SAMPLE_TIME_NOT_SET:
+        tStart = tStop = INVALID_TIME;
+        break;
+    default:
+        ASSERT(FALSE);
+        return hr;
+    }
+
+    const bool useMediaSample = (m_mt.subtype == MEDIASUBTYPE_HDMVSUB || m_mt.subtype == MEDIASUBTYPE_DVB_SUBTITLES);
+
+    if((tStart == INVALID_TIME || tStop == INVALID_TIME) && !useMediaSample)
+    {
+        ASSERT(FALSE);
+        return S_OK;
+    }
+
+    if(useMediaSample)
+    {
+        std::unique_lock<std::mutex> lock(m_mutexQueue);
+        m_sampleQueue.emplace_back(std::make_unique<SubtitleSample>(tStart, tStop, pSample));
+        lock.unlock();
+        m_condQueueReady.notify_one();
+        return S_OK;
+    }
 
     BYTE* pData = NULL;
     hr = pSample->GetPointer(&pData);
     if(FAILED(hr) || pData == NULL) return hr;
 
     int len = pSample->GetActualDataLength();
+    if(len <= 0) return S_OK;
 
+    {
+        std::unique_lock<std::mutex> lock(m_mutexQueue);
+        m_sampleQueue.emplace_back(std::make_unique<SubtitleSample>(tStart, tStop, pData, size_t(len)));
+        lock.unlock();
+        m_condQueueReady.notify_one();
+    }
+
+    return S_OK;
+}
+
+STDMETHODIMP CSubtitleInputPin::EndOfStream(void)
+{
+    HRESULT hr = __super::EndOfStream();
+
+    if(SUCCEEDED(hr))
+    {
+        std::unique_lock<std::mutex> lock(m_mutexQueue);
+        m_sampleQueue.emplace_back(nullptr); // end-of-stream marker
+        lock.unlock();
+        m_condQueueReady.notify_one();
+    }
+
+    return hr;
+}
+
+bool CSubtitleInputPin::IsRLECodedSub(const CMediaType* pmt) const
+{
+    return !!(pmt->majortype == MEDIATYPE_Subtitle
+              && (pmt->subtype == MEDIASUBTYPE_HDMVSUB
+                  || pmt->subtype == MEDIASUBTYPE_DVB_SUBTITLES));
+}
+
+void CSubtitleInputPin::DecodeSamples()
+{
+    for(; !m_bExitDecodingThread;)
+    {
+        std::unique_lock<std::mutex> lock(m_mutexQueue);
+
+        auto needStopProcessing = [this]() {
+            return m_bStopDecoding || m_bExitDecodingThread;
+        };
+
+        auto isQueueReady = [&]() {
+            return !m_sampleQueue.empty() || needStopProcessing();
+        };
+
+        m_condQueueReady.wait(lock, isQueueReady);
+        lock.unlock();
+
+        REFERENCE_TIME rtInvalidate = -1;
+
+        if(!needStopProcessing())
+        {
+            CAutoLock cAutoLock(m_pSubLock);
+            lock.lock();
+
+            while(!m_sampleQueue.empty() && !needStopProcessing())
+            {
+                const auto& pSample = m_sampleQueue.front();
+
+                if(pSample)
+                {
+                    REFERENCE_TIME rtSampleInvalidate = DecodeSample(pSample);
+                    if(rtSampleInvalidate >= 0 && (rtSampleInvalidate < rtInvalidate || rtInvalidate < 0))
+                    {
+                        rtInvalidate = rtSampleInvalidate;
+                    }
+                }
+
+                m_sampleQueue.pop_front();
+            }
+        }
+
+        if(rtInvalidate >= 0)
+        {
+            // IMPORTANT: m_pSubLock must not be locked when calling this
+            InvalidateSubtitle(rtInvalidate, m_pSubStream);
+        }
+    }
+}
+
+REFERENCE_TIME CSubtitleInputPin::DecodeSample(const std::unique_ptr<SubtitleSample>& pSample)
+{
     bool fInvalidate = false;
+
+    if(pSample->mediaSample)
+    {
+        if(m_mt.subtype == MEDIASUBTYPE_HDMVSUB || m_mt.subtype == MEDIASUBTYPE_DVB_SUBTITLES)
+        {
+            CRenderedHdmvSubtitle* pHdmvSubtitle = (CRenderedHdmvSubtitle*)(ISubStream*)m_pSubStream;
+            pHdmvSubtitle->ParseSample(pSample->mediaSample);
+        }
+
+        return -1;
+    }
+
+    if(pSample->data.size() <= 0)
+    {
+        return -1;
+    }
+
+    BYTE* pData = pSample->data.data();
+    int len = (int)pSample->data.size();
+    REFERENCE_TIME tStart = pSample->rtStart;
+    REFERENCE_TIME tStop = pSample->rtStop;
 
     if(m_mt.majortype == MEDIATYPE_Text)
     {
-        CAutoLock cAutoLock(m_pSubLock);
         CRenderedTextSubtitle* pRTS = (CRenderedTextSubtitle*)(ISubStream*)m_pSubStream;
 
         if(!strncmp((char*)pData, __GAB1__, strlen(__GAB1__)))
@@ -330,15 +489,17 @@ STDMETHODIMP CSubtitleInputPin::Receive(IMediaSample* pSample)
     }
     else if(m_mt.majortype == MEDIATYPE_Subtitle)
     {
-        CAutoLock cAutoLock(m_pSubLock);
-
-        if(m_mt.subtype == MEDIASUBTYPE_UTF8)
+        if(m_mt.subtype == MEDIASUBTYPE_UTF8 || m_mt.subtype == MEDIASUBTYPE_WEBVTT)
         {
             CRenderedTextSubtitle* pRTS = (CRenderedTextSubtitle*)(ISubStream*)m_pSubStream;
 
             CStringW str = UTF8To16(CStringA((LPCSTR)pData, len)).Trim();
             if(!str.IsEmpty())
             {
+                if(m_mt.subtype == MEDIASUBTYPE_WEBVTT)
+                {
+                    WebVTT2SSA(str);
+                }
                 pRTS->Add(str, true, (int)(tStart / 10000), (int)(tStop / 10000));
                 fInvalidate = true;
             }
@@ -394,30 +555,19 @@ STDMETHODIMP CSubtitleInputPin::Receive(IMediaSample* pSample)
             CVobSubStream* pVSS = (CVobSubStream*)(ISubStream*)m_pSubStream;
             pVSS->Add(tStart, tStop, pData, len);
         }
-        else if(m_mt.subtype == MEDIASUBTYPE_HDMVSUB || m_mt.subtype == MEDIASUBTYPE_DVB_SUBTITLES)
-        {
-//CComPtr<IReferenceClock>	pClock;
-//m_pFilter->GetSyncSource(&pClock);
-//CComPtr<IMpeg2DemultiplexerTesting>	 iTest;
-//pClock->QueryInterface(__uuidof(IMpeg2DemultiplexerTesting), (void**)&iTest);
-//ULONG ul;
-//iTest->GetMpeg2StreamType(&ul);
-            CAutoLock cAutoLock(m_pSubLock);
-            CRenderedHdmvSubtitle* pHdmvSubtitle = (CRenderedHdmvSubtitle*)(ISubStream*)m_pSubStream;
-            pHdmvSubtitle->ParseSample(pSample);
-        }
     }
 
-    if(fInvalidate)
+    return fInvalidate ? tStart : -1;
+}
+
+void CSubtitleInputPin::InvalidateSamples()
+{
+    m_bStopDecoding = true;
     {
-        TRACE(_T("InvalidateSubtitle(%I64d, ..)\n"), tStart);
-        // IMPORTANT: m_pSubLock must not be locked when calling this
-        InvalidateSubtitle(tStart, m_pSubStream);
+        std::lock_guard<std::mutex> lock(m_mutexQueue);
+        m_sampleQueue.clear();
+        m_bStopDecoding = false;
     }
-
-    hr = S_OK;
-
-    return hr;
 }
 
 

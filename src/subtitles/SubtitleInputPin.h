@@ -21,6 +21,13 @@
 
 #pragma once
 
+#include <vector>
+#include <list>
+#include <memory>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
 #include "..\subpic\ISubPic.h"
 
 //
@@ -29,10 +36,44 @@
 
 class CSubtitleInputPin : public CBaseInputPin
 {
+    static const REFERENCE_TIME INVALID_TIME = _I64_MIN;
+
     CCritSec m_csReceive;
 
     CCritSec* m_pSubLock;
     CComPtr<ISubStream> m_pSubStream;
+
+    struct SubtitleSample {
+        REFERENCE_TIME rtStart, rtStop;
+        std::vector<BYTE> data;
+        CComPtr<IMediaSample> mediaSample;
+
+        SubtitleSample(REFERENCE_TIME rtStart, REFERENCE_TIME rtStop, BYTE* pData, size_t len)
+            : rtStart(rtStart)
+            , rtStop(rtStop)
+            , data(pData, pData + len) {
+        }
+
+        SubtitleSample(REFERENCE_TIME rtStart, REFERENCE_TIME rtStop, IMediaSample* pSample)
+            : rtStart(rtStart)
+            , rtStop(rtStop)
+            , mediaSample(pSample) {
+        }
+    };
+
+    std::list<std::unique_ptr<SubtitleSample>> m_sampleQueue;
+
+    bool m_bExitDecodingThread = false;
+    bool m_bStopDecoding = false;
+    std::thread m_decodeThread;
+    std::mutex m_mutexQueue; // protects m_sampleQueue
+    std::condition_variable m_condQueueReady;
+
+    void DecodeSamples();
+    REFERENCE_TIME DecodeSample(const std::unique_ptr<SubtitleSample>& pSample);
+    void InvalidateSamples();
+
+    bool IsRLECodedSub(const CMediaType* pmt) const;
 
 protected:
     virtual void AddSubStream(ISubStream* pSubStream) = 0;
@@ -41,6 +82,7 @@ protected:
 
 public:
     CSubtitleInputPin(CBaseFilter* pFilter, CCritSec* pLock, CCritSec* pSubLock, HRESULT* phr);
+    ~CSubtitleInputPin();
 
     HRESULT CheckMediaType(const CMediaType* pmt);
     HRESULT CompleteConnect(IPin* pReceivePin);
@@ -48,6 +90,7 @@ public:
     STDMETHODIMP ReceiveConnection(IPin* pConnector, const AM_MEDIA_TYPE* pmt);
     STDMETHODIMP NewSegment(REFERENCE_TIME tStart, REFERENCE_TIME tStop, double dRate);
     STDMETHODIMP Receive(IMediaSample* pSample);
+    STDMETHODIMP EndOfStream(void);
 
     ISubStream* GetSubStream()
     {

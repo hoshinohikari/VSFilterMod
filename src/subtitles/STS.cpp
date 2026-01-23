@@ -24,6 +24,11 @@
 #include <atlbase.h>
 #include <atlconv.h>
 #include <atlstr.h>
+#include <map>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "RealTextParser.h"
 #include <fstream>
@@ -194,6 +199,29 @@ CHtmlColorMap::CHtmlColorMap()
 }
 
 CHtmlColorMap g_colors;
+
+static CStringW SSAColorTag(CStringW arg, CStringW ctag = L"c")
+{
+    DWORD val, color;
+    if(g_colors.Lookup(CString(arg), val))
+    {
+        color = (DWORD)val;
+    }
+    else if((color = wcstol(arg, nullptr, 16)) == 0)
+    {
+        color = 0x00ffffff;
+    }
+
+    CStringW tmp;
+    tmp.Format(L"%02x%02x%02x", color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff);
+    return CStringW(L"{\\" + ctag + L"&H") + tmp + L"&}";
+}
+
+static std::wstring SSAColorTagCS(std::wstring arg, CStringW ctag = L"c")
+{
+    CStringW _arg(arg.c_str());
+    return SSAColorTag(_arg, ctag).GetString();
+}
 
 //
 
@@ -490,6 +518,392 @@ static CStringW SubRipper2SSA(CStringW str, int CharSet)
     str.Replace(L"</u>", L"{\\u}");
 
     return(str);
+}
+
+static CStringW WebVTTCueStrip(CStringW& str)
+{
+    CStringW cues;
+    int p = str.Find(L'\n');
+    if(p == 0) p = str.Find(L'\r');
+    if(p > 0 && p < 6)
+    {
+        int cueid;
+        WCHAR cr;
+        int c = swscanf_s(str.Left(p), L"%d%c", &cueid, &cr, 1);
+        if(c == 1 || c == 2 && cr == L'\r')
+        {
+            str.Delete(0, p + 1);
+            p = str.Find(L'\n');
+            if(p == 0) p = str.Find(L'\r');
+        }
+    }
+    if(p > 0)
+    {
+        if(str.Left(6) == _T("align:") || str.Left(9) == _T("position:") || str.Left(9) == _T("vertical:") || str.Left(5) == _T("line:") || str.Left(5) == _T("size:"))
+        {
+            if(p > 1 && str[p - 1] == L'\r')
+                cues = str.Left(p - 1);
+            else
+                cues = str.Left(p);
+            str.Delete(0, p + 1);
+        }
+    }
+    return cues;
+}
+
+using WebVTTcolorData = struct _WebVTTcolorData { std::wstring color; std::wstring bg; bool applied = false; };
+using WebVTTcolorMap = std::map<std::wstring, WebVTTcolorData>;
+
+static void WebVTT2SSA(CStringW& str, CStringW& cueTags, WebVTTcolorMap clrMap)
+{
+    std::vector<WebVTTcolorData> styleStack;
+    auto applyStyle = [&styleStack, &str](std::wstring clr, std::wstring bg, int endTag, bool restoring = false) {
+        std::wstring tags = L"";
+        WebVTTcolorData previous;
+        bool applied = false;
+        if(styleStack.size() > 0 && !restoring)
+        {
+            auto tmp = styleStack.back();
+            if(tmp.applied) previous = tmp;
+        }
+        if(clr != L"" && clr != previous.color)
+        {
+            tags += SSAColorTagCS(clr);
+        }
+        if(bg != L"" && bg != previous.bg)
+        {
+            tags += SSAColorTagCS(bg, L"3c");
+        }
+        if(tags.length() > 0)
+        {
+            if(-1 == endTag)
+            {
+                str = tags.c_str() + str;
+                applied = true;
+            }
+            else if(str.Mid(endTag + 1, 1) != L"<")
+            {
+                str = str.Left(endTag + 1) + tags.c_str() + str.Mid(endTag + 1);
+                applied = true;
+            }
+        }
+        if(!restoring)
+        {
+            styleStack.push_back({ clr, bg, applied });
+        }
+    };
+
+    std::wstring clr = L"", bg = L"";
+    if(clrMap.count(L"::cue"))
+    {
+        WebVTTcolorData colorData = clrMap[L"::cue"];
+        clr = colorData.color;
+        bg = colorData.bg;
+        applyStyle(clr, bg, -1);
+    }
+
+    int tagPos = str.Find(L"<");
+    while(tagPos != -1)
+    {
+        int endTag = str.Find(L">", tagPos);
+        if(endTag == -1) break;
+        CStringW inner = str.Mid(tagPos + 1, endTag - tagPos - 1);
+        if(inner.Find(L"/") == 0)
+        {
+            if(styleStack.size() > 0)
+                styleStack.pop_back();
+            if(styleStack.size() > 0)
+            {
+                auto restoreStyle = styleStack[styleStack.size() - 1];
+                clr = restoreStyle.color;
+                bg = restoreStyle.bg;
+                applyStyle(clr, bg, endTag, true);
+            }
+            else
+            {
+                if(endTag + 1 != str.GetLength())
+                    str = str.Left(endTag + 1) + L"{\\r}" + str.Mid(endTag + 1);
+                clr = L"";
+                bg = L"";
+            }
+            tagPos = str.Find(L"<", endTag);
+            continue;
+        }
+
+        int dotPos = inner.Find(L".");
+        if(dotPos == -1)
+        {
+            if(clrMap.count(inner.GetString()))
+            {
+                WebVTTcolorData colorData = clrMap[inner.GetString()];
+                clr = colorData.color;
+                bg = colorData.bg;
+            }
+        }
+        else
+        {
+            std::wstring innerStd(inner);
+            std::wregex clsPattern(LR"((\.?[^\.]+))");
+            std::vector<std::wstring> parts;
+            for(std::wsregex_iterator it(innerStd.begin(), innerStd.end(), clsPattern), end; it != end; ++it)
+            {
+                parts.push_back((*it)[0]);
+            }
+            if(parts.size() > 1)
+            {
+                std::wstring type = parts[0];
+                for(size_t i = 1; i < parts.size(); ++i)
+                {
+                    std::wstring cls = parts[i];
+                    WebVTTcolorData colorData;
+                    if(clrMap.count(type + cls))
+                        colorData = clrMap[type + cls];
+                    else if(clrMap.count(cls))
+                        colorData = clrMap[cls];
+                    if(colorData.color != L"") clr = colorData.color;
+                    if(colorData.bg != L"") bg = colorData.bg;
+                }
+            }
+        }
+
+        applyStyle(clr, bg, endTag);
+        tagPos = str.Find(L"<", endTag);
+    }
+
+    if(str.Find(L'<') >= 0)
+    {
+        str.Replace(L"<i>", L"{\\i1}");
+        str.Replace(L"</i>", L"{\\i}");
+        str.Replace(L"<b>", L"{\\b1}");
+        str.Replace(L"</b>", L"{\\b}");
+        str.Replace(L"<u>", L"{\\u1}");
+        str.Replace(L"</u>", L"{\\u}");
+    }
+
+    if(str.Find(L'<') >= 0)
+    {
+        std::wstring stdTmp(str);
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"<c[.\\w\\d]*>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"</c[.\\w\\d]*>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"<\\d\\d:\\d\\d:\\d\\d.\\d\\d\\d>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"<v[ .][^>]*>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"</v>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"<lang[^>]*>"), L"");
+        stdTmp = std::regex_replace(stdTmp, std::wregex(L"</lang>"), L"");
+        str = stdTmp.c_str();
+    }
+
+    if(str.Find(L'&') >= 0)
+    {
+        str.Replace(L"&lt;", L"<");
+        str.Replace(L"&gt;", L">");
+        str.Replace(L"&nbsp;", L"\\h");
+        str.Replace(L"&lrm;", L"");
+        str.Replace(L"&rlm;", L"");
+        str.Replace(L"&amp;", L"&");
+    }
+
+    if(!cueTags.IsEmpty())
+    {
+        std::wstring stdTmp(cueTags);
+        std::wregex alignRegex(L"align:(start|left|center|middle|end|right)");
+        std::wsmatch match;
+
+        if(std::regex_search(stdTmp, match, alignRegex))
+        {
+            if(match[1] == L"start" || match[1] == L"left")
+                str = L"{\\an1}" + str;
+            else if(match[1] == L"center" || match[1] == L"middle")
+                str = L"{\\an2}" + str;
+            else
+                str = L"{\\an3}" + str;
+        }
+    }
+}
+
+void WebVTT2SSA(CStringW& str)
+{
+    CStringW discard;
+    WebVTTcolorMap discardMap;
+    WebVTT2SSA(str, discard, discardMap);
+}
+
+static bool OpenVTT(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
+{
+    CStringW buff;
+    file->ReadString(buff);
+    if(buff.Left(6).Compare(L"WEBVTT") != 0)
+        return false;
+
+    auto readTimeCode = [](LPCWSTR str, int& hh, int& mm, int& ss, int& ms) {
+        WCHAR sep;
+        int c = swscanf_s(str, L"%d%c%d%c%d%c%d", &hh, &sep, 1, &mm, &sep, 1, &ss, &sep, 1, &ms);
+        if(c == 5)
+        {
+            ms = ss;
+            ss = mm;
+            mm = hh;
+            hh = 0;
+        }
+        return (c == 5 || c == 7);
+    };
+
+    WebVTTcolorMap cueColors = {
+        {L".white", WebVTTcolorData({L"ffffff", L""})},
+        {L".lime", WebVTTcolorData({L"00ff00", L""})},
+        {L".cyan", WebVTTcolorData({L"00ffff", L""})},
+        {L".red", WebVTTcolorData({L"ff0000", L""})},
+        {L".yellow", WebVTTcolorData({L"ffff00", L""})},
+        {L".magenta", WebVTTcolorData({L"ff00ff", L""})},
+        {L".blue", WebVTTcolorData({L"0000ff", L""})},
+        {L".black", WebVTTcolorData({L"000000", L""})},
+        {L".bg_white", WebVTTcolorData({L"", L"ffffff"})},
+        {L".bg_lime", WebVTTcolorData({L"", L"00ff00"})},
+        {L".bg_cyan", WebVTTcolorData({L"", L"00ffff"})},
+        {L".bg_red", WebVTTcolorData({L"", L"ff0000"})},
+        {L".bg_yellow", WebVTTcolorData({L"", L"ffff00"})},
+        {L".bg_magenta", WebVTTcolorData({L"", L"ff00ff"})},
+        {L".bg_blue", WebVTTcolorData({L"", L"0000ff"})},
+        {L".bg_black", WebVTTcolorData({L"", L"000000"})},
+    };
+
+    CStringW start, end, cueTags;
+
+    auto parseStyle = [&file, &cueColors](CStringW& buff) {
+        CStringW styleStr = L"";
+        while(file->ReadString(buff))
+        {
+            if(buff.Find(L"-->") != -1)
+            {
+                buff.TrimRight();
+                break;
+            }
+            if(buff.IsEmpty())
+                break;
+            styleStr += L" " + buff;
+        }
+
+        int startComment = styleStr.Find(L"/*");
+        while(startComment != -1)
+        {
+            int endComment = styleStr.Find(L"*/", startComment + 2);
+            if(endComment == -1) endComment = styleStr.GetLength() - 1;
+            styleStr.Delete(startComment, endComment - startComment + 1);
+            startComment = styleStr.Find(L"/*");
+        }
+
+        if(!styleStr.IsEmpty())
+        {
+            auto parseColor = [](std::wstring styles, std::wstring attr = L"color") {
+                std::wstring clrPattern = L"^\\s*" + attr + L"\\s*:\\s*#?([a-zA-Z0-9]*)\\s*;";
+                std::wstring rgbPattern = L"^\\s*" + attr + L"\\s*:\\s*rgb\\s*\\(\\s*([0-9]+)\\s*,\\s*([0-9]+)\\s*,\\s*([0-9]+)\\s*\\)\\s*;";
+                std::wregex clrPat(clrPattern);
+                std::wregex rgbPat(rgbPattern);
+                std::wsmatch match;
+                std::wstring clrStr = L"";
+                if(std::regex_search(styles, match, clrPat))
+                {
+                    clrStr = match[1].str();
+                }
+                else if(std::regex_search(styles, match, rgbPat))
+                {
+                    int r = _wtoi(match[1].str().c_str()) & 0xff;
+                    int g = _wtoi(match[2].str().c_str()) & 0xff;
+                    int b = _wtoi(match[3].str().c_str()) & 0xff;
+                    DWORD clr = (r << 16) + (g << 8) + b;
+                    std::wstringstream hexClr;
+                    hexClr << std::hex << clr;
+                    clrStr = hexClr.str();
+                }
+                return clrStr;
+            };
+
+            std::vector<std::wsmatch> results;
+            auto findAll = [&](const std::wregex& pattern, const std::wstring& text) {
+                results.clear();
+                for(std::wsregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it)
+                {
+                    results.push_back(*it);
+                }
+            };
+
+            std::wregex cueDefPattern(LR"(::cue\s*\{([^}]*)\})");
+            findAll(cueDefPattern, std::wstring(styleStr));
+            if(results.size() > 0)
+            {
+                auto iter = results[results.size() - 1];
+                std::wstring clr, bgClr;
+                clr = parseColor(iter[1].str());
+                bgClr = parseColor(iter[1].str(), L"background-color");
+                if(bgClr == L"") bgClr = parseColor(iter[1].str(), L"background");
+                if(clr != L"" || bgClr != L"") cueColors[L"::cue"] = WebVTTcolorData({ clr, bgClr });
+            }
+
+            std::wregex cuePattern(LR"(::cue\(([^)]+)\)\s*\{([^}]*)\})");
+            findAll(cuePattern, std::wstring(styleStr));
+            for(const auto& iter : results)
+            {
+                std::wstring clr, bgClr;
+                clr = parseColor(iter[2].str());
+                bgClr = parseColor(iter[2].str(), L"background-color");
+                if(bgClr == L"") bgClr = parseColor(iter[2].str(), L"background");
+                if(clr != L"" || bgClr != L"") cueColors[iter[1].str()] = WebVTTcolorData({ clr, bgClr });
+            }
+        }
+    };
+
+    CStringW lastStr, lastBuff;
+    bool foundFirstCue = false;
+    while(file->ReadString(buff))
+    {
+        buff.TrimRight();
+        if(!foundFirstCue && !buff.IsEmpty())
+        {
+            if(buff == L"STYLE" || buff == L"Style:")
+                parseStyle(buff);
+        }
+        if(buff.IsEmpty())
+            continue;
+
+        int len = buff.GetLength();
+        cueTags = L"";
+        int c = swscanf_s(buff, L"%s --> %s %[^\n]", start.GetBuffer(len), len, end.GetBuffer(len), len, cueTags.GetBuffer(len), len);
+        start.ReleaseBuffer();
+        end.ReleaseBuffer();
+        cueTags.ReleaseBuffer();
+
+        int hh1, mm1, ss1, ms1, hh2, mm2, ss2, ms2;
+
+        if((c == 2 || c == 3) && readTimeCode(start, hh1, mm1, ss1, ms1) && readTimeCode(end, hh2, mm2, ss2, ms2))
+        {
+            foundFirstCue = true;
+            CStringW str, tmp;
+
+            while(file->ReadString(tmp))
+            {
+                tmp.TrimRight();
+                if(tmp.IsEmpty()) break;
+                WebVTT2SSA(tmp, cueTags, cueColors);
+                str += tmp + '\n';
+            }
+
+            if(lastStr != str || lastBuff != buff)
+            {
+                ret.Add(str, file->IsUnicode(),
+                    (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1,
+                    (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2);
+            }
+
+            lastStr = str;
+            lastBuff = buff;
+        }
+        else
+        {
+            continue;
+        }
+    }
+
+    return true;
 }
 
 static bool OpenSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
@@ -2265,22 +2679,23 @@ typedef struct
 {
     STSOpenFunct open;
     tmode mode;
-    exttype type;
+    Subtitle::SubType type;
 } OpenFunctStruct;
 
 static OpenFunctStruct OpenFuncts[] =
 {
-    OpenSubRipper, TIME, EXTSRT,
-    OpenOldSubRipper, TIME, EXTSRT,
-    OpenSubViewer, TIME, EXTSUB,
-    OpenMicroDVD, FRAME, EXTSSA,
-    OpenSami, TIME, EXTSMI,
-    OpenVPlayer, TIME, EXTSRT,
-    OpenSubStationAlpha, TIME, EXTSSA,
-    OpenXombieSub, TIME, EXTXSS,
-    OpenUSF, TIME, EXTUSF,
-    OpenMPL2, TIME, EXTSRT,
-    OpenRealText, TIME, EXTRT,
+    OpenVTT, TIME, Subtitle::VTT,
+    OpenSubRipper, TIME, Subtitle::SRT,
+    OpenOldSubRipper, TIME, Subtitle::SRT,
+    OpenSubViewer, TIME, Subtitle::SUB,
+    OpenMicroDVD, FRAME, Subtitle::SSA,
+    OpenSami, TIME, Subtitle::SMI,
+    OpenVPlayer, TIME, Subtitle::SRT,
+    OpenSubStationAlpha, TIME, Subtitle::SSA,
+    OpenXombieSub, TIME, Subtitle::XSS,
+    OpenUSF, TIME, Subtitle::USF,
+    OpenMPL2, TIME, Subtitle::SRT,
+    OpenRealText, TIME, Subtitle::RT,
 };
 
 static int nOpenFuncts = countof(OpenFuncts);
@@ -3259,19 +3674,24 @@ bool CSimpleTextSubtitle::Open(BYTE* data, int len, int CharSet, CString name)
     return(fRet);
 }
 
-bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::enc e)
+bool CSimpleTextSubtitle::SaveAs(CString fn, Subtitle::SubType et, double fps, CTextFile::enc e)
 {
-    if(fn.Mid(fn.ReverseFind('.') + 1).CompareNoCase(exttypestr[et]))
+    LPCTSTR ext = Subtitle::GetSubtitleFileExt(et);
+    if (!ext) {
+        return false;
+    }
+
+    if(fn.Mid(fn.ReverseFind('.') + 1).CompareNoCase(ext))
     {
         if(fn[fn.GetLength()-1] != '.') fn += _T(".");
-        fn += exttypestr[et];
+        fn += ext;
     }
 
     CTextFile f;
     if(!f.Save(fn, e))
         return(false);
 
-    if(et == EXTSMI)
+    if(et == Subtitle::SMI)
     {
         CString str;
 
@@ -3289,17 +3709,17 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
 
         f.WriteString(str);
     }
-    else if(et == EXTSSA || et == EXTASS)
+    else if(et == Subtitle::SSA || et == Subtitle::ASS)
     {
         CString str;
 
         str  = _T("[Script Info]\n");
-        str += (et == EXTSSA) ? _T("; This is a Sub Station Alpha v4 script.\n") : _T("; This is an Advanced Sub Station Alpha v4+ script.\n");
+        str += (et == Subtitle::SSA) ? _T("; This is a Sub Station Alpha v4 script.\n") : _T("; This is an Advanced Sub Station Alpha v4+ script.\n");
         str += _T("; For Sub Station Alpha info and downloads,\n");
         str += _T("; go to http://www.eswat.demon.co.uk/\n");
         str += _T("; or email kotus@eswat.demon.co.uk\n");
         str += _T("; \n");
-        if(et == EXTASS)
+        if(et == Subtitle::ASS)
         {
             str += _T("; Advanced Sub Station Alpha script format developed by #Anime-Fansubs@EfNET\n");
             str += _T("; http://www.anime-fansubs.org\n");
@@ -3310,14 +3730,14 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
         }
         str += _T("; Note: This file was saved by Subresync.\n");
         str += _T("; \n");
-        str += (et == EXTSSA) ? _T("ScriptType: v4.00\n") : _T("ScriptType: v4.00+\n");
+        str += (et == Subtitle::SSA) ? _T("ScriptType: v4.00\n") : _T("ScriptType: v4.00+\n");
         str += (m_collisions == 0) ? _T("Collisions: Normal\n") : _T("Collisions: Reverse\n");
-        if(et == EXTASS && m_fScaledBAS) str += _T("ScaledBorderAndShadow: Yes\n");
+        if(et == Subtitle::ASS && m_fScaledBAS) str += _T("ScaledBorderAndShadow: Yes\n");
         str += _T("PlayResX: %d\n");
         str += _T("PlayResY: %d\n");
         str += _T("Timer: 100.0000\n");
         str += _T("\n");
-        str += (et == EXTSSA)
+        str += (et == Subtitle::SSA)
                ? _T("[V4 Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding\n")
                : _T("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
 
@@ -3325,7 +3745,7 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
         str2.Format(str, m_dstScreenSize.cx, m_dstScreenSize.cy);
         f.WriteString(str2);
 
-        str  = (et == EXTSSA)
+        str  = (et == Subtitle::SSA)
                ? _T("Style: %s,%s,%d,&H%06x,&H%06x,&H%06x,&H%06x,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n")
                : _T("Style: %s,%s,%d,&H%08x,&H%08x,&H%08x,&H%08x,%d,%d,%d,%d,%d,%d,%d,%.2f,%d,%d,%d,%d,%d,%d,%d,%d\n");
 
@@ -3336,7 +3756,7 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
             STSStyle* s;
             m_styles.GetNextAssoc(pos, key, s);
 
-            if(et == EXTSSA)
+            if(et == Subtitle::SSA)
             {
                 CString str2;
                 str2.Format(str, key,
@@ -3380,7 +3800,7 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
         {
             str  = _T("\n");
             str += _T("[Events]\n");
-            str += (et == EXTSSA)
+            str += (et == Subtitle::SSA)
                    ? _T("Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
                    : _T("Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text\n");
             f.WriteString(str);
@@ -3388,12 +3808,12 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
     }
 
     CStringW fmt =
-        et == EXTSRT ? L"%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n" :
-        et == EXTSUB ? L"{%d}{%d}%s\n" :
-        et == EXTSMI ? L"<SYNC Start=%d><P Class=UNKNOWNCC>\n%s\n<SYNC Start=%d><P Class=UNKNOWNCC>&nbsp;\n" :
-        et == EXTPSB ? L"{%d:%02d:%02d}{%d:%02d:%02d}%s\n" :
-        et == EXTSSA ? L"Dialogue: Marked=0,%d:%02d:%02d.%02d,%d:%02d:%02d.%02d,%s,%s,%04d,%04d,%04d,%s,%s\n" :
-        et == EXTASS ? L"Dialogue: %d,%d:%02d:%02d.%02d,%d:%02d:%02d.%02d,%s,%s,%04d,%04d,%04d,%s,%s\n" :
+        et == Subtitle::SRT ? L"%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n" :
+        et == Subtitle::SUB ? L"{%d}{%d}%s\n" :
+        et == Subtitle::SMI ? L"<SYNC Start=%d><P Class=UNKNOWNCC>\n%s\n<SYNC Start=%d><P Class=UNKNOWNCC>&nbsp;\n" :
+        et == Subtitle::PSB ? L"{%d:%02d:%02d}{%d:%02d:%02d}%s\n" :
+        et == Subtitle::SSA ? L"Dialogue: Marked=0,%d:%02d:%02d.%02d,%d:%02d:%02d.%02d,%s,%s,%04d,%04d,%04d,%s,%s\n" :
+        et == Subtitle::ASS ? L"Dialogue: %d,%d:%02d:%02d.%02d,%d:%02d:%02d.%02d,%s,%s,%04d,%04d,%04d,%s,%s\n" :
         L"";
 //	Sort(true);
 
@@ -3420,31 +3840,31 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
         int ms2 = (t2) % 1000;
 
         CStringW str = f.IsUnicode()
-                       ? GetStrW(i, et == EXTSSA || et == EXTASS)
-                       : GetStrWA(i, et == EXTSSA || et == EXTASS);
+                       ? GetStrW(i, et == Subtitle::SSA || et == Subtitle::ASS)
+                       : GetStrWA(i, et == Subtitle::SSA || et == Subtitle::ASS);
 
         CStringW str2;
 
-        if(et == EXTSRT)
+        if(et == Subtitle::SRT)
         {
             str2.Format(fmt, i - k + 1, hh1, mm1, ss1, ms1, hh2, mm2, ss2, ms2, str);
         }
-        else if(et == EXTSUB)
+        else if(et == Subtitle::SUB)
         {
             str.Replace('\n', '|');
             str2.Format(fmt, int(t1 * fps / 1000), int(t2 * fps / 1000), str);
         }
-        else if(et == EXTSMI)
+        else if(et == Subtitle::SMI)
         {
             str.Replace(L"\n", L"<br>");
             str2.Format(fmt, t1, str, t2);
         }
-        else if(et == EXTPSB)
+        else if(et == Subtitle::PSB)
         {
             str.Replace('\n', '|');
             str2.Format(fmt, hh1, mm1, ss1, hh2, mm2, ss2, str);
         }
-        else if(et == EXTSSA)
+        else if(et == Subtitle::SSA)
         {
             str.Replace(L"\n", L"\\N");
             str2.Format(fmt,
@@ -3454,7 +3874,7 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
                         stse.marginRect.left, stse.marginRect.right, (stse.marginRect.top + stse.marginRect.bottom) / 2,
                         TToW(stse.effect), str);
         }
-        else if(et == EXTASS)
+        else if(et == Subtitle::ASS)
         {
             str.Replace(L"\n", L"\\N");
             str2.Format(fmt,
@@ -3471,13 +3891,13 @@ bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::
 
 //	Sort();
 
-    if(et == EXTSMI)
+    if(et == Subtitle::SMI)
     {
         f.WriteString(_T("</BODY>\n</SAMI>\n"));
     }
 
     STSStyle* s;
-    if(!m_fUsingAutoGeneratedDefaultStyle && m_styles.Lookup(_T("Default"), s) && et != EXTSSA && et != EXTASS)
+    if(!m_fUsingAutoGeneratedDefaultStyle && m_styles.Lookup(_T("Default"), s) && et != Subtitle::SSA && et != Subtitle::ASS)
     {
         CTextFile f;
         if(!f.Save(fn + _T(".style"), e))

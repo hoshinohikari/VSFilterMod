@@ -297,6 +297,39 @@ interface IDirectVobSub2 :
                                           ) PURE;
     };
 
+    [uuid("4484A031-713F-4893-8C24-4505C56E8915")]
+interface IDirectVobSub3 :
+    public IDirectVobSub2
+    {
+        STDMETHOD_(bool, get_DisableSubtitleAnimation)(THIS_
+                                                       ) PURE;
+
+        STDMETHOD(put_DisableSubtitleAnimation)(THIS_
+                                                 bool bDisableSubtitleAnimation
+                                                ) PURE;
+
+        STDMETHOD_(int, get_RenderAtWhenAnimationIsDisabled)(THIS_
+                                                             ) PURE;
+
+        STDMETHOD(put_RenderAtWhenAnimationIsDisabled)(THIS_
+                                                       int nRenderAtWhenAnimationIsDisabled
+                                                      ) PURE;
+
+        STDMETHOD_(int, get_AnimationRate)(THIS_
+                                           ) PURE;
+
+        STDMETHOD(put_AnimationRate)(THIS_
+                                     int nAnimationRate
+                                    ) PURE;
+
+        STDMETHOD_(bool, get_AllowDroppingSubpic)(THIS_
+                                                  ) PURE;
+
+        STDMETHOD(put_AllowDroppingSubpic)(THIS_
+                                           bool bAllowDroppingSubpic
+                                          ) PURE;
+    };
+
 
 #ifdef __cplusplus
 }

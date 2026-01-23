@@ -23,7 +23,7 @@
 
 #include <atlcoll.h>
 
-enum exttype {EXTSRT = 0, EXTSUB, EXTSMI, EXTPSB, EXTSSA, EXTASS, EXTIDX, EXTUSF, EXTXSS, EXTRT};
+enum exttype {EXTSRT = 0, EXTSUB, EXTSMI, EXTPSB, EXTSSA, EXTASS, EXTIDX, EXTUSF, EXTXSS, EXTRT, EXTVTT};
 extern TCHAR* exttypestr[];
 typedef struct
 {

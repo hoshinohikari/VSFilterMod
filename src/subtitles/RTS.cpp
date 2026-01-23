@@ -21,9 +21,11 @@
 
 #include "stdafx.h"
 #include <cmath>
+#include <memory>
 #include <math.h>
 #include <time.h>
 #include "RTS.h"
+#include "RenderingCache.h"
 
 #if defined (_VSMOD) && defined(_LUA)
 // path m012. Lua animation
@@ -32,6 +34,35 @@
 // WARNING: this isn't very thread safe, use only one RTS a time.
 static HDC g_hDC;
 static int g_hDC_refcnt = 0;
+
+struct CTextDims
+{
+    int width;
+};
+
+struct CPolygonPath
+{
+    CAtlArray<BYTE> typesOrg;
+    CAtlArray<CPoint> pointsOrg;
+};
+
+typedef std::shared_ptr<CPolygonPath> CPolygonPathSharedPtr;
+typedef CRenderingCache<CTextDimsKey, CTextDims, CKeyTraits<CTextDimsKey>> CTextDimsCache;
+typedef CRenderingCache<CPolygonPathKey, CPolygonPathSharedPtr, CKeyTraits<CPolygonPathKey>> CPolygonCache;
+
+struct RenderingCaches
+{
+    CTextDimsCache textDimsCache;
+    CPolygonCache polygonCache;
+
+    RenderingCaches()
+        : textDimsCache(2048)
+        , polygonCache(2048)
+    {
+    }
+};
+
+static RenderingCaches g_renderingCaches;
 
 static long revcolor(long c)
 {
@@ -695,6 +726,15 @@ CText::CText(STSStyle& style, CStringW str, int ktype, int kstart, int kend, dou
         m_fWhiteSpaceChar = true;
     }
 
+    CTextDimsKey textDimsKey(m_str, m_style);
+    CTextDims textDims;
+    if(g_renderingCaches.textDimsCache.Lookup(textDimsKey, textDims))
+    {
+        m_width = textDims.width;
+        m_width = (int)(m_style.fontScaleX / 100 * m_width + 4) >> 3;
+        return;
+    }
+
     CMyFont font(m_style);
 
     HFONT hOldFont = SelectFont(g_hDC, font);
@@ -739,9 +779,11 @@ CText::CText(STSStyle& style, CStringW str, int ktype, int kstart, int kend, dou
 #endif
     }
 
-    m_width = (int)(m_style.fontScaleX / 100 * m_width + 4) >> 3;
-
     SelectFont(g_hDC, hOldFont);
+
+    textDims.width = m_width;
+    m_width = (int)(m_style.fontScaleX / 100 * m_width + 4) >> 3;
+    g_renderingCaches.textDimsCache.SetAt(textDimsKey, textDims);
 }
 
 CWord* CText::Copy()
@@ -875,122 +917,138 @@ bool CPolygon::ParseStr()
 {
     if(m_pathTypesOrg.GetCount() > 0) return(true);
 
-    CPoint p;
-    int i, j, lastsplinestart = -1, firstmoveto = -1, lastmoveto = -1;
-
-    CStringW str = m_str;
-    str.SpanIncluding(L"mnlbspc 0123456789");
-    str.Replace(L"m", L"*m");
-    str.Replace(L"n", L"*n");
-    str.Replace(L"l", L"*l");
-    str.Replace(L"b", L"*b");
-    str.Replace(L"s", L"*s");
-    str.Replace(L"p", L"*p");
-    str.Replace(L"c", L"*c");
-
-    int k = 0;
-    for(CStringW s = str.Tokenize(L"*", k); !s.IsEmpty(); s = str.Tokenize(L"*", k))
+    bool useCache = false;
+    CPolygonPathSharedPtr cachedPath;
+    CPolygonPathKey cacheKey(m_str, m_scalex, m_scaley);
+    if(g_renderingCaches.polygonCache.Lookup(cacheKey, cachedPath) && cachedPath)
     {
-        WCHAR c = s[0];
-        s.TrimLeft(L"mnlbspc ");
-        switch(c)
-        {
-        case 'm':
-            lastmoveto = m_pathTypesOrg.GetCount();
-            if(firstmoveto == -1) firstmoveto = lastmoveto;
-            while(GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_MOVETO);
-                m_pathPointsOrg.Add(p);
-            }
-            break;
-        case 'n':
-            while(GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_MOVETONC);
-                m_pathPointsOrg.Add(p);
-            }
-            break;
-        case 'l':
-            if (m_pathPointsOrg.GetCount() < 1) break;
-            while(GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_LINETO);
-                m_pathPointsOrg.Add(p);
-            }
-            break;
-        case 'b':
-            j = m_pathTypesOrg.GetCount();
-            if (j < 1) break;
-            while(GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_BEZIERTO);
-                m_pathPointsOrg.Add(p);
-                j++;
-            }
-            j = m_pathTypesOrg.GetCount() - ((m_pathTypesOrg.GetCount() - j) % 3);
-            m_pathTypesOrg.SetCount(j);
-            m_pathPointsOrg.SetCount(j);
-            break;
-        case 's':
-            if (m_pathPointsOrg.GetCount() < 1) break;
-            j = lastsplinestart = m_pathTypesOrg.GetCount();
-            i = 3;
-            while(i-- && GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_BSPLINETO);
-                m_pathPointsOrg.Add(p);
-                j++;
-            }
-            if(m_pathTypesOrg.GetCount() - lastsplinestart < 3)
-            {
-                m_pathTypesOrg.SetCount(lastsplinestart);
-                m_pathPointsOrg.SetCount(lastsplinestart);
-                lastsplinestart = -1;
-            }
-            // no break here
-        case 'p':
-            if (m_pathPointsOrg.GetCount() < 3) break;
-            while(GetPOINT(s, p))
-            {
-                m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
-                m_pathPointsOrg.Add(p);
-                j++;
-            }
-            break;
-        case 'c':
-            if(lastsplinestart > 0)
-            {
-                m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
-                m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
-                m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
-                p = m_pathPointsOrg[lastsplinestart-1]; // we need p for temp storage, because operator [] will return a reference to CPoint and Add() may reallocate its internal buffer (this is true for MFC 7.0 but not for 6.0, hehe)
-                m_pathPointsOrg.Add(p);
-                p = m_pathPointsOrg[lastsplinestart];
-                m_pathPointsOrg.Add(p);
-                p = m_pathPointsOrg[lastsplinestart+1];
-                m_pathPointsOrg.Add(p);
-                lastsplinestart = -1;
-            }
-            break;
-        default:
-            break;
-        }
+        m_pathTypesOrg.Copy(cachedPath->typesOrg);
+        m_pathPointsOrg.Copy(cachedPath->pointsOrg);
+        useCache = true;
     }
 
-    if(lastmoveto == -1 || firstmoveto > 0)
+    if(!useCache)
     {
-        m_pathTypesOrg.RemoveAll();
-        m_pathPointsOrg.RemoveAll();
-        return(false);
+        CPoint p;
+        int i, j, lastsplinestart = -1, firstmoveto = -1, lastmoveto = -1;
+
+        CStringW str = m_str;
+        str.SpanIncluding(L"mnlbspc 0123456789");
+        str.Replace(L"m", L"*m");
+        str.Replace(L"n", L"*n");
+        str.Replace(L"l", L"*l");
+        str.Replace(L"b", L"*b");
+        str.Replace(L"s", L"*s");
+        str.Replace(L"p", L"*p");
+        str.Replace(L"c", L"*c");
+
+        int k = 0;
+        for(CStringW s = str.Tokenize(L"*", k); !s.IsEmpty(); s = str.Tokenize(L"*", k))
+        {
+            WCHAR c = s[0];
+            s.TrimLeft(L"mnlbspc ");
+            switch(c)
+            {
+            case 'm':
+                lastmoveto = m_pathTypesOrg.GetCount();
+                if(firstmoveto == -1) firstmoveto = lastmoveto;
+                while(GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_MOVETO);
+                    m_pathPointsOrg.Add(p);
+                }
+                break;
+            case 'n':
+                while(GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_MOVETONC);
+                    m_pathPointsOrg.Add(p);
+                }
+                break;
+            case 'l':
+                if (m_pathPointsOrg.GetCount() < 1) break;
+                while(GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_LINETO);
+                    m_pathPointsOrg.Add(p);
+                }
+                break;
+            case 'b':
+                j = m_pathTypesOrg.GetCount();
+                if (j < 1) break;
+                while(GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_BEZIERTO);
+                    m_pathPointsOrg.Add(p);
+                    j++;
+                }
+                j = m_pathTypesOrg.GetCount() - ((m_pathTypesOrg.GetCount() - j) % 3);
+                m_pathTypesOrg.SetCount(j);
+                m_pathPointsOrg.SetCount(j);
+                break;
+            case 's':
+                if (m_pathPointsOrg.GetCount() < 1) break;
+                j = lastsplinestart = m_pathTypesOrg.GetCount();
+                i = 3;
+                while(i-- && GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_BSPLINETO);
+                    m_pathPointsOrg.Add(p);
+                    j++;
+                }
+                if(m_pathTypesOrg.GetCount() - lastsplinestart < 3)
+                {
+                    m_pathTypesOrg.SetCount(lastsplinestart);
+                    m_pathPointsOrg.SetCount(lastsplinestart);
+                    lastsplinestart = -1;
+                }
+                // no break here
+            case 'p':
+                if (m_pathPointsOrg.GetCount() < 3) break;
+                while(GetPOINT(s, p))
+                {
+                    m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
+                    m_pathPointsOrg.Add(p);
+                    j++;
+                }
+                break;
+            case 'c':
+                if(lastsplinestart > 0)
+                {
+                    m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
+                    m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
+                    m_pathTypesOrg.Add(PT_BSPLINEPATCHTO);
+                    p = m_pathPointsOrg[lastsplinestart-1]; // we need p for temp storage, because operator [] will return a reference to CPoint and Add() may reallocate its internal buffer (this is true for MFC 7.0 but not for 6.0, hehe)
+                    m_pathPointsOrg.Add(p);
+                    p = m_pathPointsOrg[lastsplinestart];
+                    m_pathPointsOrg.Add(p);
+                    p = m_pathPointsOrg[lastsplinestart+1];
+                    m_pathPointsOrg.Add(p);
+                    lastsplinestart = -1;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+
+        if(lastmoveto == -1 || firstmoveto > 0)
+        {
+            m_pathTypesOrg.RemoveAll();
+            m_pathPointsOrg.RemoveAll();
+            return(false);
+        }
     }
 
     int minx = INT_MAX, miny = INT_MAX, maxx = -INT_MAX, maxy = -INT_MAX;
 
-    for(i = 0; i < m_pathTypesOrg.GetCount(); i++)
+    for(int i = 0; i < m_pathTypesOrg.GetCount(); i++)
     {
-        m_pathPointsOrg[i].x = (int)(m_scalex * m_pathPointsOrg[i].x);
-        m_pathPointsOrg[i].y = (int)(m_scaley * m_pathPointsOrg[i].y);
+        if(!useCache)
+        {
+            m_pathPointsOrg[i].x = (int)(m_scalex * m_pathPointsOrg[i].x);
+            m_pathPointsOrg[i].y = (int)(m_scaley * m_pathPointsOrg[i].y);
+        }
         if(minx > m_pathPointsOrg[i].x) minx = m_pathPointsOrg[i].x;
         if(miny > m_pathPointsOrg[i].y) miny = m_pathPointsOrg[i].y;
         if(maxx < m_pathPointsOrg[i].x) maxx = m_pathPointsOrg[i].x;
@@ -1007,6 +1065,14 @@ bool CPolygon::ParseStr()
     m_width = ((int)(m_style.fontScaleX / 100 * m_width) + 4) >> 3;
     m_ascent = ((int)(m_style.fontScaleY / 100 * m_ascent) + 4) >> 3;
     m_descent = ((int)(m_style.fontScaleY / 100 * m_descent) + 4) >> 3;
+
+    if(!useCache)
+    {
+        CPolygonPathSharedPtr path = std::make_shared<CPolygonPath>();
+        path->typesOrg.Copy(m_pathTypesOrg);
+        path->pointsOrg.Copy(m_pathPointsOrg);
+        g_renderingCaches.polygonCache.SetAt(cacheKey, path);
+    }
 
     return(true);
 }
