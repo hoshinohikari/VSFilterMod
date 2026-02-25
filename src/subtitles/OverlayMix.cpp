@@ -257,7 +257,10 @@ void* l_CheckMix(lua_State* L)
     if (mix)
         return mix;
     else
-        return (void*)lua_Error(L, "Argument #1 is invalid, no valid 'link' field (need table 'renderer')");
+    {
+        lua_Error(L, "Argument #1 is invalid, no valid 'link' field (need table 'renderer')");
+        return NULL;
+    }
 }
 
 // Get pixel local pix, color = r:get(x, y)
@@ -375,14 +378,7 @@ template<class T> void COverlayLuaMixer<T>::Draw(bool Body)
         LuaAddFunctionField(L, "mix", &lua_RendererMix<T>);
 
         // function(line, rend)
-        if (lua_pcall(L, 2, 0, 0) != 0)
-        {
-            // error
-            CString ErrorText = L"Error: ";
-            CString LuaErrorText(lua_tostring(L, -1));
-
-            LuaError(ErrorText + LuaErrorText);
-        }
+        LuaPCall(L, 2, 0, 0, L"renderer");
     }
 }
 

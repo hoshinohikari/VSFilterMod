@@ -21,6 +21,7 @@
 
 #include "stdafx.h"
 #include "MemSubPic.h"
+#include <algorithm>
 
 // color conv
 #define DEFINE_YUV_MATRIX(Kr,Kg,Kb) {                        \
@@ -153,8 +154,9 @@ void ColorConvInit()
 // CMemSubPic
 //
 
-CMemSubPic::CMemSubPic(SubPicDesc& spd, int inYCbCrMatrix, int inYCbCrRange)
-    : m_spd(spd)
+CMemSubPic::CMemSubPic(SubPicDesc& spd, CMemSubPicAllocator* pAllocator, int inYCbCrMatrix, int inYCbCrRange)
+    : m_pAllocator(pAllocator)
+    , m_spd(spd)
     , m_eYCbCrMatrix(inYCbCrMatrix)
     , m_eYCbCrRange(inYCbCrRange)
 {
@@ -164,7 +166,12 @@ CMemSubPic::CMemSubPic(SubPicDesc& spd, int inYCbCrMatrix, int inYCbCrRange)
 
 CMemSubPic::~CMemSubPic()
 {
-    delete [] m_spd.bits, m_spd.bits = NULL;
+    if (m_pAllocator) {
+        m_pAllocator->FreeSpdBits(m_spd);
+    } else {
+        delete [] m_spd.bits;
+    }
+    m_spd.bits = NULL;
 }
 
 // ISubPic
@@ -214,6 +221,10 @@ STDMETHODIMP CMemSubPic::ClearDirtyRect(DWORD color)
 {
     if(m_rcDirty.IsRectEmpty())
         return S_FALSE;
+
+    if (m_bInvAlpha) {
+        color = 0x00000000;
+    }
 
     BYTE* p = (BYTE*)m_spd.bits + m_spd.pitch * m_rcDirty.top + m_rcDirty.left * (m_spd.bpp >> 3);
     for(ptrdiff_t j = 0, h = m_rcDirty.Height(); j < h; j++, p += m_spd.pitch)
@@ -668,6 +679,15 @@ CMemSubPicAllocator::CMemSubPicAllocator(int type, SIZE maxsize, int inYCbCrMatr
 {
 }
 
+CMemSubPicAllocator::~CMemSubPicAllocator()
+{
+    CAutoLock cAutoLock(this);
+
+    for (const auto& p : m_freeMemoryChunks) {
+        delete[] p.second;
+    }
+}
+
 // ISubPicAllocatorImpl
 
 bool CMemSubPicAllocator::Alloc(bool fStatic, ISubPic** ppSubPic)
@@ -681,15 +701,48 @@ bool CMemSubPicAllocator::Alloc(bool fStatic, ISubPic** ppSubPic)
     spd.bpp = 32;
     spd.pitch = (spd.w * spd.bpp) >> 3;
     spd.type = m_type;
-    spd.bits = DNew BYTE[spd.pitch*spd.h]; 
- 	if(!spd.bits) 
+    if (!AllocSpdBits(spd))
         return(false);
 
-    *ppSubPic = DNew CMemSubPic(spd, m_eYCbCrMatrix, m_eYCbCrRange);
+    *ppSubPic = DNew CMemSubPic(spd, this, m_eYCbCrMatrix, m_eYCbCrRange);
  	if(!(*ppSubPic)) 
         return(false);
 
     (*ppSubPic)->AddRef();
+    (*ppSubPic)->SetInverseAlpha(m_bInvAlpha);
 
     return(true);
+}
+
+bool CMemSubPicAllocator::AllocSpdBits(SubPicDesc& spd)
+{
+    CAutoLock cAutoLock(this);
+
+    ASSERT(!spd.bits);
+    ASSERT(spd.pitch * spd.h > 0);
+
+    auto it = std::find_if(m_freeMemoryChunks.cbegin(), m_freeMemoryChunks.cend(), [&](const std::pair<size_t, BYTE*>& p) {
+        return p.first == size_t(spd.pitch) * spd.h;
+    });
+
+    if (it != m_freeMemoryChunks.cend()) {
+        spd.bits = it->second;
+        m_freeMemoryChunks.erase(it);
+    } else {
+        spd.bits = DNew BYTE[spd.pitch * spd.h];
+        if (!spd.bits) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void CMemSubPicAllocator::FreeSpdBits(SubPicDesc& spd)
+{
+    CAutoLock cAutoLock(this);
+
+    ASSERT(spd.bits);
+    m_freeMemoryChunks.emplace_back(size_t(spd.pitch) * spd.h, static_cast<BYTE*>(spd.bits));
+    spd.bits = nullptr;
 }

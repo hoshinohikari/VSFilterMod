@@ -548,10 +548,19 @@ void CDirectVobSubFilter::InitSubPicQueue()
     pSubPicAllocator->SetCurSize(window);
     pSubPicAllocator->SetCurVidRect(CRect(CPoint((window.cx - video.cx) / 2, (window.cy - video.cy) / 2), video));
 
+    SubPicQueueSettings queueSettings;
+    queueSettings.nSize = min(max((int)m_uSubPictToBuffer, 1), 120);
+    queueSettings.nMaxResX = max(m_w, 1);
+    queueSettings.nMaxResY = max(m_h, 1);
+    queueSettings.bDisableSubtitleAnimation = m_bDisableSubtitleAnimation || !m_fAnimWhenBuffering;
+    queueSettings.nRenderAtWhenAnimationIsDisabled = min(max(m_nRenderAtWhenAnimationIsDisabled, 0), 100);
+    queueSettings.nAnimationRate = min(max(m_nAnimationRate, 1), 1000);
+    queueSettings.bAllowDroppingSubpic = m_bAllowDroppingSubpic;
+
     HRESULT hr = S_OK;
     m_pSubPicQueue = m_fDoPreBuffering
-                     ? (ISubPicQueue*)new CSubPicQueue(10, false, pSubPicAllocator, &hr)
-                     : (ISubPicQueue*)new CSubPicQueueNoThread(pSubPicAllocator, &hr);
+                     ? (ISubPicQueue*)new CSubPicQueue(queueSettings, pSubPicAllocator, &hr)
+                     : (ISubPicQueue*)new CSubPicQueueNoThread(queueSettings, pSubPicAllocator, &hr);
 
     if(FAILED(hr)) m_pSubPicQueue = NULL;
 
@@ -976,6 +985,30 @@ STDMETHODIMP CDirectVobSubFilter::put_PreBuffering(bool fDoPreBuffering)
     return hr;
 }
 
+STDMETHODIMP CDirectVobSubFilter::put_SubPictToBuffer(unsigned int uSubPictToBuffer)
+{
+    HRESULT hr = CDirectVobSub::put_SubPictToBuffer(uSubPictToBuffer);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
+    }
+
+    return hr;
+}
+
+STDMETHODIMP CDirectVobSubFilter::put_AnimWhenBuffering(bool fAnimWhenBuffering)
+{
+    HRESULT hr = CDirectVobSub::put_AnimWhenBuffering(fAnimWhenBuffering);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
+    }
+
+    return hr;
+}
+
 STDMETHODIMP CDirectVobSubFilter::put_Placement(bool fOverridePlacement, int xperc, int yperc)
 {
     HRESULT hr = CDirectVobSub::put_Placement(fOverridePlacement, xperc, yperc);
@@ -1092,6 +1125,56 @@ STDMETHODIMP CDirectVobSubFilter::put_AspectRatioSettings(CSimpleTextSubtitle::E
     if(hr == NOERROR)
     {
         UpdateSubtitle(true);
+    }
+
+    return hr;
+}
+
+// IDirectVobSub3
+
+STDMETHODIMP CDirectVobSubFilter::put_DisableSubtitleAnimation(bool bDisableSubtitleAnimation)
+{
+    HRESULT hr = CDirectVobSub::put_DisableSubtitleAnimation(bDisableSubtitleAnimation);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
+    }
+
+    return hr;
+}
+
+STDMETHODIMP CDirectVobSubFilter::put_RenderAtWhenAnimationIsDisabled(int nRenderAtWhenAnimationIsDisabled)
+{
+    HRESULT hr = CDirectVobSub::put_RenderAtWhenAnimationIsDisabled(nRenderAtWhenAnimationIsDisabled);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
+    }
+
+    return hr;
+}
+
+STDMETHODIMP CDirectVobSubFilter::put_AnimationRate(int nAnimationRate)
+{
+    HRESULT hr = CDirectVobSub::put_AnimationRate(nAnimationRate);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
+    }
+
+    return hr;
+}
+
+STDMETHODIMP CDirectVobSubFilter::put_AllowDroppingSubpic(bool bAllowDroppingSubpic)
+{
+    HRESULT hr = CDirectVobSub::put_AllowDroppingSubpic(bAllowDroppingSubpic);
+
+    if(hr == NOERROR)
+    {
+        InitSubPicQueue();
     }
 
     return hr;

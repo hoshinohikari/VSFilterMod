@@ -92,6 +92,8 @@ public:
     STDMETHODIMP put_SelectedLanguage(int iSelected);
     STDMETHODIMP put_HideSubtitles(bool fHideSubtitles);
     STDMETHODIMP put_PreBuffering(bool fDoPreBuffering);
+    STDMETHODIMP put_SubPictToBuffer(unsigned int uSubPictToBuffer);
+    STDMETHODIMP put_AnimWhenBuffering(bool fAnimWhenBuffering);
     STDMETHODIMP put_Placement(bool fOverridePlacement, int xperc, int yperc);
     STDMETHODIMP put_VobSubSettings(bool fBuffer, bool fOnlyShowForcedSubs, bool fPolygonize);
     STDMETHODIMP put_TextSettings(void* lf, int lflen, COLORREF color, bool fShadow, bool fOutline, bool fAdvancedRenderer);
@@ -106,6 +108,12 @@ public:
     // IDirectVobSub2
     STDMETHODIMP put_TextSettings(STSStyle* pDefStyle);
     STDMETHODIMP put_AspectRatioSettings(CSimpleTextSubtitle::EPARCompensationType* ePARCompensationType);
+
+    // IDirectVobSub3
+    STDMETHODIMP put_DisableSubtitleAnimation(bool bDisableSubtitleAnimation);
+    STDMETHODIMP put_RenderAtWhenAnimationIsDisabled(int nRenderAtWhenAnimationIsDisabled);
+    STDMETHODIMP put_AnimationRate(int nAnimationRate);
+    STDMETHODIMP put_AllowDroppingSubpic(bool bAllowDroppingSubpic);
 
     // ISpecifyPropertyPages
     STDMETHODIMP GetPages(CAUUID* pPages);

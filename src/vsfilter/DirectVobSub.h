@@ -37,6 +37,8 @@ protected:
     int m_iSelectedLanguage;
     bool m_fHideSubtitles;
     bool m_fDoPreBuffering;
+    unsigned int m_uSubPictToBuffer;
+    bool m_fAnimWhenBuffering;
     bool m_fOverridePlacement;
     int	m_PlacementXperc, m_PlacementYperc;
     bool m_fBufferVobSub, m_fOnlyShowForcedVobSubs, m_fPolygonize;
@@ -121,6 +123,10 @@ public:
     STDMETHODIMP put_ExtendPicture(int horizontal, int vertical, int resx2, int resx2minw, int resx2minh);
     STDMETHODIMP get_LoadSettings(int* level, bool* fExternalLoad, bool* fWebLoad, bool* fEmbeddedLoad);
     STDMETHODIMP put_LoadSettings(int level, bool fExternalLoad, bool fWebLoad, bool fEmbeddedLoad);
+    STDMETHODIMP get_SubPictToBuffer(unsigned int* uSubPictToBuffer);
+    STDMETHODIMP put_SubPictToBuffer(unsigned int uSubPictToBuffer);
+    STDMETHODIMP get_AnimWhenBuffering(bool* fAnimWhenBuffering);
+    STDMETHODIMP put_AnimWhenBuffering(bool fAnimWhenBuffering);
 
     // IDirectVobSub2
 

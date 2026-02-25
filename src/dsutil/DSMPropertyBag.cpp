@@ -123,14 +123,14 @@ HRESULT IDSMPropertyBagImpl::DelProperty(LPCWSTR key)
 //
 
 CCritSec CDSMResource::m_csResources;
-CAtlMap<DWORD, CDSMResource*> CDSMResource::m_resources;
+CAtlMap<DWORD_PTR, CDSMResource*> CDSMResource::m_resources;
 
 CDSMResource::CDSMResource()
     : mime(_T("application/octet-stream"))
     , tag(0)
 {
     CAutoLock cAutoLock(&m_csResources);
-    m_resources.SetAt((DWORD)this, this);
+    m_resources.SetAt(reinterpret_cast<DWORD_PTR>(this), this);
 }
 
 CDSMResource::CDSMResource(const CDSMResource& r)
@@ -138,7 +138,7 @@ CDSMResource::CDSMResource(const CDSMResource& r)
     *this = r;
 
     CAutoLock cAutoLock(&m_csResources);
-    m_resources.SetAt((DWORD)this, this);
+    m_resources.SetAt(reinterpret_cast<DWORD_PTR>(this), this);
 }
 
 CDSMResource::CDSMResource(LPCWSTR name, LPCWSTR desc, LPCWSTR mime, BYTE* pData, int len, DWORD_PTR tag)
@@ -151,13 +151,13 @@ CDSMResource::CDSMResource(LPCWSTR name, LPCWSTR desc, LPCWSTR mime, BYTE* pData
     this->tag = tag;
 
     CAutoLock cAutoLock(&m_csResources);
-    m_resources.SetAt((DWORD)this, this);
+    m_resources.SetAt(reinterpret_cast<DWORD_PTR>(this), this);
 }
 
 CDSMResource::~CDSMResource()
 {
     CAutoLock cAutoLock(&m_csResources);
-    m_resources.RemoveKey((DWORD)this);
+    m_resources.RemoveKey(reinterpret_cast<DWORD_PTR>(this));
 }
 
 CDSMResource& CDSMResource::operator = (const CDSMResource& r)

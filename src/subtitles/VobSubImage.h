@@ -23,7 +23,7 @@
 
 #include <atlcoll.h>
 
-typedef struct
+struct COutline
 {
     CAtlArray<CPoint> pa;
     CAtlArray<int> da;
@@ -37,7 +37,7 @@ typedef struct
         pa.Add(p);
         da.Add(d);
     }
-} COutline;
+};
 
 class CVobSubImage
 {

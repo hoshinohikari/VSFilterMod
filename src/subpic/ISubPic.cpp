@@ -21,7 +21,13 @@
 
 #include "stdafx.h"
 #include "ISubPic.h"
+#include <cmath>
 #include "..\DSUtil\DSUtil.h"
+
+static int ClampIntValue(int value, int minValue, int maxValue)
+{
+    return value < minValue ? minValue : (value > maxValue ? maxValue : value);
+}
 
 //
 // ISubPicImpl
@@ -33,6 +39,8 @@ ISubPicImpl::ISubPicImpl()
     , m_rtSegmentStart(0), m_rtSegmentStop(0)
     , m_rcDirty(0, 0, 0, 0), m_maxsize(0, 0), m_size(0, 0), m_vidrect(0, 0, 0, 0)
     , m_VirtualTextureSize(0, 0), m_VirtualTextureTopLeft(0, 0)
+    , m_relativeTo(WINDOW)
+    , m_bInvAlpha(false)
 {
 }
 
@@ -103,6 +111,8 @@ STDMETHODIMP ISubPicImpl::CopyTo(ISubPic* pSubPic)
     pSubPic->SetDirtyRect(m_rcDirty);
     pSubPic->SetSize(m_size, m_vidrect);
     pSubPic->SetVirtualTextureSize(m_VirtualTextureSize, m_VirtualTextureTopLeft);
+    pSubPic->SetRelativeTo(m_relativeTo);
+    pSubPic->SetInverseAlpha(m_bInvAlpha);
 
     return S_OK;
 }
@@ -112,30 +122,145 @@ STDMETHODIMP ISubPicImpl::GetDirtyRect(RECT* pDirtyRect)
     return pDirtyRect ? *pDirtyRect = m_rcDirty, S_OK : E_POINTER;
 }
 
-STDMETHODIMP ISubPicImpl::GetSourceAndDest(SIZE* pSize, RECT* pRcSource, RECT* pRcDest)
+STDMETHODIMP ISubPicImpl::GetSourceAndDest(RECT rcWindow, RECT rcVideo, RECT* pRcSource, RECT* pRcDest,
+                                           const double videoStretchFactor, int xOffsetInPixels, int yOffsetInPixels)
 {
     CheckPointer(pRcSource, E_POINTER);
-    CheckPointer(pRcDest,	 E_POINTER);
+    CheckPointer(pRcDest, E_POINTER);
 
-    if(m_size.cx > 0 && m_size.cy > 0)
-    {
-        CRect		rcTemp = m_rcDirty;
+    if (m_size.cx > 0 && m_size.cy > 0 && m_rcDirty.Height() > 0) {
+        CRect videoRect(rcVideo);
+        CRect windowRect(rcWindow);
+
+        CRect originalDirtyRect = m_rcDirty;
 
         // FIXME
-        rcTemp.DeflateRect(1, 1);
+        originalDirtyRect.DeflateRect(1, 1);
 
-        *pRcSource = rcTemp;
+        *pRcSource = originalDirtyRect;
+        originalDirtyRect.OffsetRect(m_VirtualTextureTopLeft);
 
-        rcTemp.OffsetRect(m_VirtualTextureTopLeft);
-        *pRcDest = CRect(rcTemp.left   * pSize->cx / m_VirtualTextureSize.cx,
-                         rcTemp.top    * pSize->cy / m_VirtualTextureSize.cy,
-                         rcTemp.right  * pSize->cx / m_VirtualTextureSize.cx,
-                         rcTemp.bottom * pSize->cy / m_VirtualTextureSize.cy);
+        CRect targetDirtyRect;
 
+        if (videoRect.Size() != windowRect.Size() || videoRect.Size() != m_VirtualTextureSize) {
+            if (m_relativeTo == BEST_FIT && m_VirtualTextureSize.cx > 720 && videoStretchFactor == 1.0) {
+                CRect visibleRect;
+                visibleRect.top    = videoRect.top    > windowRect.top    ? (videoRect.top    > windowRect.bottom ? windowRect.bottom : videoRect.top)    : windowRect.top;
+                visibleRect.bottom = videoRect.bottom < windowRect.bottom ? (videoRect.bottom < windowRect.top    ? windowRect.top    : videoRect.bottom) : windowRect.bottom;
+                visibleRect.left   = videoRect.left   > windowRect.left   ? (videoRect.left   > windowRect.right  ? windowRect.right  : videoRect.left)   : windowRect.left;
+                visibleRect.right  = videoRect.right  < windowRect.right  ? (videoRect.right  < windowRect.left   ? windowRect.left   : videoRect.right)  : windowRect.right;
+                if (visibleRect.Width() <= 0 || visibleRect.Height() <= 0) {
+                    visibleRect = windowRect;
+                    ASSERT(false);
+                }
+
+                CPoint offset(0, 0);
+                double scaleFactor = 1.0;
+                double subtitleAR = double(m_VirtualTextureSize.cx) / m_VirtualTextureSize.cy;
+                double visibleAR = double(visibleRect.Width()) / visibleRect.Height();
+                double vertical_stretch = 1.0;
+                if (visibleAR * 2 - subtitleAR < 0.01) {
+                    vertical_stretch = 2.0;
+                    subtitleAR /= 2.0;
+                }
+
+                if (visibleAR == subtitleAR) {
+                    scaleFactor = double(visibleRect.Width()) / m_VirtualTextureSize.cx;
+                    targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.top * scaleFactor * vertical_stretch),
+                                             (LONG)std::lround(originalDirtyRect.right * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.bottom * scaleFactor * vertical_stretch));
+                    targetDirtyRect.OffsetRect(visibleRect.TopLeft());
+                } else if (visibleAR > subtitleAR) {
+                    scaleFactor = double(visibleRect.Width()) / m_VirtualTextureSize.cx;
+                    int extraheight = (int)std::lround(m_VirtualTextureSize.cy * scaleFactor * vertical_stretch - visibleRect.Height());
+                    CRect expandedRect = visibleRect;
+                    expandedRect.top -= extraheight / 2;
+                    expandedRect.bottom += extraheight - extraheight / 2;
+                    offset.x = expandedRect.left;
+                    offset.y = expandedRect.top;
+
+                    targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.top * scaleFactor * vertical_stretch),
+                                             (LONG)std::lround(originalDirtyRect.right * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.bottom * scaleFactor * vertical_stretch));
+                    targetDirtyRect.OffsetRect(offset);
+
+                    if (!(expandedRect.left >= windowRect.left && expandedRect.top >= windowRect.top
+                          && expandedRect.right <= windowRect.right && expandedRect.bottom <= windowRect.bottom)) {
+                        if (!(targetDirtyRect.left >= windowRect.left && targetDirtyRect.top >= windowRect.top
+                              && targetDirtyRect.right <= windowRect.right && targetDirtyRect.bottom <= windowRect.bottom)) {
+                            scaleFactor = double(windowRect.Height()) / m_VirtualTextureSize.cy / vertical_stretch;
+                            offset.x = (LONG)std::lround((windowRect.Width() - scaleFactor * m_VirtualTextureSize.cx) / 2.0);
+                            offset.y = 0;
+
+                            targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleFactor),
+                                                     (LONG)std::lround(originalDirtyRect.top * scaleFactor * vertical_stretch),
+                                                     (LONG)std::lround(originalDirtyRect.right * scaleFactor),
+                                                     (LONG)std::lround(originalDirtyRect.bottom * scaleFactor * vertical_stretch));
+                            targetDirtyRect.OffsetRect(offset);
+                        }
+                    }
+                } else {
+                    scaleFactor = double(visibleRect.Height()) / m_VirtualTextureSize.cy / vertical_stretch;
+                    int extrawidth = (int)std::lround(m_VirtualTextureSize.cx * scaleFactor - visibleRect.Width());
+                    CRect expandedRect = visibleRect;
+                    expandedRect.left -= extrawidth / 2;
+                    expandedRect.right += extrawidth - extrawidth / 2;
+                    offset.x = expandedRect.left;
+                    offset.y = expandedRect.top;
+
+                    targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.top * scaleFactor * vertical_stretch),
+                                             (LONG)std::lround(originalDirtyRect.right * scaleFactor),
+                                             (LONG)std::lround(originalDirtyRect.bottom * scaleFactor * vertical_stretch));
+                    targetDirtyRect.OffsetRect(offset);
+
+                    if (!(expandedRect.left >= windowRect.left && expandedRect.top >= windowRect.top
+                          && expandedRect.right <= windowRect.right && expandedRect.bottom <= windowRect.bottom)) {
+                        if (!(targetDirtyRect.left >= windowRect.left && targetDirtyRect.top >= windowRect.top
+                              && targetDirtyRect.right <= windowRect.right && targetDirtyRect.bottom <= windowRect.bottom)) {
+                            scaleFactor = double(windowRect.Width()) / m_VirtualTextureSize.cx;
+                            offset.x = 0;
+                            offset.y = (LONG)std::lround((windowRect.Height() - scaleFactor * m_VirtualTextureSize.cy * vertical_stretch) / 2.0);
+
+                            targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleFactor),
+                                                     (LONG)std::lround(originalDirtyRect.top * scaleFactor * vertical_stretch),
+                                                     (LONG)std::lround(originalDirtyRect.right * scaleFactor),
+                                                     (LONG)std::lround(originalDirtyRect.bottom * scaleFactor * vertical_stretch));
+                            targetDirtyRect.OffsetRect(offset);
+                        }
+                    }
+                }
+            } else {
+                CRect rcTarget = (m_relativeTo == WINDOW) ? windowRect : videoRect;
+                CSize szTarget = rcTarget.Size();
+                double scaleX = double(szTarget.cx) / m_VirtualTextureSize.cx;
+                double scaleY = double(szTarget.cy) / m_VirtualTextureSize.cy;
+
+                targetDirtyRect = CRect((LONG)std::lround(originalDirtyRect.left * scaleX),
+                                         (LONG)std::lround(originalDirtyRect.top * scaleY),
+                                         (LONG)std::lround(originalDirtyRect.right * scaleX),
+                                         (LONG)std::lround(originalDirtyRect.bottom * scaleY));
+                targetDirtyRect.OffsetRect(rcTarget.TopLeft());
+            }
+        } else {
+            targetDirtyRect = originalDirtyRect;
+        }
+
+        if (videoStretchFactor != 1.0) {
+            LONG stretch = (LONG)std::lround(targetDirtyRect.Width() * (1.0 - 1.0 / videoStretchFactor) / 2.0);
+            targetDirtyRect.left += stretch;
+            targetDirtyRect.right -= stretch;
+        }
+
+        targetDirtyRect.OffsetRect(CPoint(xOffsetInPixels, yOffsetInPixels));
+
+        *pRcDest = targetDirtyRect;
         return S_OK;
     }
-    else
-        return E_INVALIDARG;
+
+    return E_INVALIDARG;
 }
 
 STDMETHODIMP ISubPicImpl::SetDirtyRect(RECT* pDirtyRect)
@@ -185,6 +310,24 @@ STDMETHODIMP ISubPicImpl::SetVirtualTextureSize(const SIZE pSize, const POINT pT
     return S_OK;
 }
 
+STDMETHODIMP ISubPicImpl::GetRelativeTo(RelativeTo* pRelativeTo)
+{
+    CheckPointer(pRelativeTo, E_POINTER);
+    *pRelativeTo = m_relativeTo;
+    return S_OK;
+}
+
+STDMETHODIMP ISubPicImpl::SetRelativeTo(RelativeTo relativeTo)
+{
+    m_relativeTo = relativeTo;
+    return S_OK;
+}
+
+STDMETHODIMP_(void) ISubPicImpl::SetInverseAlpha(bool bInverted)
+{
+    m_bInvAlpha = bInverted;
+}
+
 //
 // ISubPicAllocatorImpl
 //
@@ -194,6 +337,7 @@ ISubPicAllocatorImpl::ISubPicAllocatorImpl(SIZE cursize, bool fDynamicWriteOnly,
     , m_cursize(cursize)
     , m_fDynamicWriteOnly(fDynamicWriteOnly)
     , m_fPow2Textures(fPow2Textures)
+    , m_bInvAlpha(false)
 {
     m_curvidrect = CRect(CPoint(0, 0), m_cursize);
 }
@@ -261,6 +405,11 @@ STDMETHODIMP ISubPicAllocatorImpl::ChangeDevice(IUnknown* pDev)
     return S_OK;
 }
 
+STDMETHODIMP_(void) ISubPicAllocatorImpl::SetInverseAlpha(bool bInverted)
+{
+    m_bInvAlpha = bInverted;
+}
+
 
 //
 // ISubPicProviderImpl
@@ -299,13 +448,43 @@ STDMETHODIMP ISubPicProviderImpl::Unlock()
 // ISubPicQueueImpl
 //
 
-ISubPicQueueImpl::ISubPicQueueImpl(ISubPicAllocator* pAllocator, HRESULT* phr)
+ISubPicQueueImpl::ISubPicQueueImpl(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr)
     : CUnknown(NAME("ISubPicQueueImpl"), NULL)
-    , m_pAllocator(pAllocator)
+    , m_fps(25.0)
     , m_rtNow(0)
     , m_rtNowLast(0)
-    , m_fps(25.0)
+    , m_settings(settings)
+    , m_pAllocator(pAllocator)
 {
+    m_settings.nSize = ClampIntValue(m_settings.nSize, 1, 120);
+    m_settings.nMaxResX = ClampIntValue(m_settings.nMaxResX, 1, 16384);
+    m_settings.nMaxResY = ClampIntValue(m_settings.nMaxResY, 1, 16384);
+    m_settings.nRenderAtWhenAnimationIsDisabled = ClampIntValue(m_settings.nRenderAtWhenAnimationIsDisabled, 0, 100);
+    m_settings.nAnimationRate = ClampIntValue(m_settings.nAnimationRate, 1, 1000);
+
+    if(phr) *phr = S_OK;
+
+    if(!m_pAllocator)
+    {
+        if(phr) *phr = E_FAIL;
+        return;
+    }
+}
+
+ISubPicQueueImpl::ISubPicQueueImpl(ISubPicAllocator* pAllocator, HRESULT* phr)
+    : CUnknown(NAME("ISubPicQueueImpl"), NULL)
+    , m_fps(25.0)
+    , m_rtNow(0)
+    , m_rtNowLast(0)
+    , m_settings()
+    , m_pAllocator(pAllocator)
+{
+    m_settings.nSize = ClampIntValue(m_settings.nSize, 1, 120);
+    m_settings.nMaxResX = ClampIntValue(m_settings.nMaxResX, 1, 16384);
+    m_settings.nMaxResY = ClampIntValue(m_settings.nMaxResY, 1, 16384);
+    m_settings.nRenderAtWhenAnimationIsDisabled = ClampIntValue(m_settings.nRenderAtWhenAnimationIsDisabled, 0, 100);
+    m_settings.nAnimationRate = ClampIntValue(m_settings.nAnimationRate, 1, 1000);
+
     if(phr) *phr = S_OK;
 
     if(!m_pAllocator)
@@ -393,7 +572,15 @@ HRESULT ISubPicQueueImpl::RenderTo(ISubPic* pSubPic, REFERENCE_TIME rtStart, REF
        && SUCCEEDED(pSubPic->Lock(spd)))
     {
         CRect r(0, 0, 0, 0);
-        hr = pSubPicProvider->Render(spd, bIsAnimated ? rtStart : ((rtStart + rtStop) / 2), fps, r);
+        REFERENCE_TIME rtRender = rtStart;
+        if(!bIsAnimated)
+        {
+            REFERENCE_TIME rtSpan = rtStop - rtStart - 1;
+            if(rtSpan < 0) rtSpan = 0;
+            rtRender = rtStart + (REFERENCE_TIME)(rtSpan * (double)m_settings.nRenderAtWhenAnimationIsDisabled / 100.0);
+        }
+
+        hr = pSubPicProvider->Render(spd, rtRender, fps, r);
 
         pSubPic->SetStart(rtStart);
         pSubPic->SetStop(rtStop);
@@ -410,10 +597,32 @@ HRESULT ISubPicQueueImpl::RenderTo(ISubPic* pSubPic, REFERENCE_TIME rtStart, REF
 // CSubPicQueue
 //
 
+CSubPicQueue::CSubPicQueue(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr)
+    : ISubPicQueueImpl(settings, pAllocator, phr)
+    , m_nMaxSubPic(m_settings.nSize)
+    , m_bDisableAnim(m_settings.bDisableSubtitleAnimation ? TRUE : FALSE)
+    , m_rtQueueMin(0)
+    , m_rtQueueMax(0)
+{
+    if(phr && FAILED(*phr))
+        return;
+
+    if(m_nMaxSubPic < 1)
+    {
+        if(phr) *phr = E_INVALIDARG;
+        return;
+    }
+
+    m_fBreakBuffering = false;
+    for(ptrdiff_t i = 0; i < EVENT_COUNT; i++)
+        m_ThreadEvents[i] = CreateEvent(NULL, FALSE, FALSE, NULL);
+    CAMThread::Create();
+}
+
 CSubPicQueue::CSubPicQueue(int nMaxSubPic, BOOL bDisableAnim, ISubPicAllocator* pAllocator, HRESULT* phr)
-    : ISubPicQueueImpl(pAllocator, phr)
-    , m_nMaxSubPic(nMaxSubPic)
-    , m_bDisableAnim(bDisableAnim)
+    : ISubPicQueueImpl(SubPicQueueSettings(nMaxSubPic, 2560, 1440, !!bDisableAnim, 50, 100, true), pAllocator, phr)
+    , m_nMaxSubPic(m_settings.nSize)
+    , m_bDisableAnim(m_settings.bDisableSubtitleAnimation ? TRUE : FALSE)
     , m_rtQueueMin(0)
     , m_rtQueueMax(0)
 {
@@ -487,6 +696,8 @@ STDMETHODIMP_(bool) CSubPicQueue::LookupSubPic(REFERENCE_TIME rtNow, CComPtr<ISu
     CAutoLock cQueueLock(&m_csQueueLock);
 
     REFERENCE_TIME rtBestStop = 0x7fffffffffffffffi64;
+    REFERENCE_TIME rtNearestFutureStart = 0x7fffffffffffffffi64;
+    CComPtr<ISubPic> pNearestFutureSubPic;
     POSITION pos = m_Queue.GetHeadPosition();
 #if DSubPicTraceLevel > 2
     TRACE("Find: ");
@@ -511,6 +722,11 @@ STDMETHODIMP_(bool) CSubPicQueue::LookupSubPic(REFERENCE_TIME rtNow, CComPtr<ISu
                 TRACE("   !%f->%f", double(Diff) / 10000000.0, double(rtStop) / 10000000.0);
 #endif
         }
+        else if(!m_settings.bAllowDroppingSubpic && rtStart > rtNow && rtStart < rtNearestFutureStart)
+        {
+            rtNearestFutureStart = rtStart;
+            pNearestFutureSubPic = pSubPic;
+        }
 #if DSubPicTraceLevel > 2
         else
             TRACE("   !!%f->%f", double(rtStart) / 10000000.0, double(rtSegmentStop) / 10000000.0);
@@ -520,6 +736,11 @@ STDMETHODIMP_(bool) CSubPicQueue::LookupSubPic(REFERENCE_TIME rtNow, CComPtr<ISu
 #if DSubPicTraceLevel > 2
     TRACE("\n");
 #endif
+    if(!ppSubPic && !m_settings.bAllowDroppingSubpic)
+    {
+        ppSubPic = pNearestFutureSubPic;
+    }
+
     if(!ppSubPic)
     {
 #if DSubPicTraceLevel > 1
@@ -679,7 +900,8 @@ void CSubPicQueue::AppendQueue(ISubPic* pSubPic)
 DWORD CSubPicQueue::ThreadProc()
 {
     BOOL bDisableAnim = m_bDisableAnim;
-    SetThreadPriority(m_hThread, bDisableAnim ? THREAD_PRIORITY_LOWEST : THREAD_PRIORITY_ABOVE_NORMAL/*THREAD_PRIORITY_BELOW_NORMAL*/);
+    BOOL bAllowDroppingSubpic = m_settings.bAllowDroppingSubpic ? TRUE : FALSE;
+    SetThreadPriority(m_hThread, bDisableAnim ? THREAD_PRIORITY_LOWEST : (bAllowDroppingSubpic ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_HIGHEST));
 
     bool bAgain = true;
     while(1)
@@ -692,7 +914,12 @@ DWORD CSubPicQueue::ThreadProc()
         else if((Ret - WAIT_OBJECT_0) != EVENT_TIME)
             break;
         double fps = m_fps;
-        REFERENCE_TIME rtTimePerFrame = 10000000.0 / fps;
+        if(fps <= 0) fps = 25.0;
+        int nAnimationRate = max(m_settings.nAnimationRate, 1);
+        REFERENCE_TIME rtTimePerFrame = (REFERENCE_TIME)(10000000.0 / fps);
+        if(rtTimePerFrame < 1) rtTimePerFrame = 1;
+        REFERENCE_TIME rtTimePerSubFrame = (REFERENCE_TIME)(rtTimePerFrame * 100.0 / nAnimationRate);
+        if(rtTimePerSubFrame < 1) rtTimePerSubFrame = 1;
         REFERENCE_TIME rtNow = UpdateQueue();
 
         int nMaxSubPic = m_nMaxSubPic;
@@ -737,10 +964,10 @@ DWORD CSubPicQueue::ThreadProc()
                         HRESULT hr;
                         if(bIsAnimated)
                         {
-                            if(rtCurrent < m_rtNow + rtTimePerFrame)
-                                rtCurrent = min(m_rtNow + rtTimePerFrame, rtStop - 1);
+                            if(rtCurrent < m_rtNow + rtTimePerSubFrame)
+                                rtCurrent = min(m_rtNow + rtTimePerSubFrame, rtStop - 1);
 
-                            REFERENCE_TIME rtEndThis = min(rtCurrent + rtTimePerFrame, rtStop);
+                            REFERENCE_TIME rtEndThis = min(rtCurrent + rtTimePerSubFrame, rtStop);
                             hr = RenderTo(pStatic, rtCurrent, rtEndThis, fps, bIsAnimated);
                             pStatic->SetSegmentStart(rtStart);
                             pStatic->SetSegmentStop(rtStop);
@@ -839,8 +1066,13 @@ DWORD CSubPicQueue::ThreadProc()
 // CSubPicQueueNoThread
 //
 
+CSubPicQueueNoThread::CSubPicQueueNoThread(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr)
+    : ISubPicQueueImpl(settings, pAllocator, phr)
+{
+}
+
 CSubPicQueueNoThread::CSubPicQueueNoThread(ISubPicAllocator* pAllocator, HRESULT* phr)
-    : ISubPicQueueImpl(pAllocator, phr)
+    : ISubPicQueueImpl(SubPicQueueSettings(), pAllocator, phr)
 {
 }
 
@@ -887,17 +1119,22 @@ STDMETHODIMP_(bool) CSubPicQueueNoThread::LookupSubPic(REFERENCE_TIME rtNow, CCo
  	    if (pSubPicProvider && SUCCEEDED(pSubPicProvider->Lock())) 
         {
             double fps = m_fps;
+            if(fps <= 0) fps = 25.0;
 
             POSITION pos = pSubPicProvider->GetStartPosition(rtNow, fps); 
- 	        if(pos != 0) 
+  	        if(pos != 0) 
             {
                 REFERENCE_TIME rtStart = pSubPicProvider->GetStart(pos, fps);
                 REFERENCE_TIME rtStop = pSubPicProvider->GetStop(pos, fps);
+                bool bIsAnimated = pSubPicProvider->IsAnimated(pos) && !m_settings.bDisableSubtitleAnimation;
 
-                if(pSubPicProvider->IsAnimated(pos))
+                if(bIsAnimated)
                 {
+                    int nAnimationRate = max(m_settings.nAnimationRate, 1);
+                    REFERENCE_TIME rtAnimationStep = (REFERENCE_TIME)(10000000.0 / (fps * nAnimationRate / 100.0));
+                    if(rtAnimationStep < 1) rtAnimationStep = 1;
                     rtStart = rtNow;
-                    rtStop = rtNow + 1;
+                    rtStop = min(rtNow + rtAnimationStep, rtStop);
                 }
 
                 if(rtStart <= rtNow && rtNow < rtStop)
@@ -912,13 +1149,13 @@ STDMETHODIMP_(bool) CSubPicQueueNoThread::LookupSubPic(REFERENCE_TIME rtNow, CCo
                     {
                         CComPtr<ISubPic> pStatic;
                         if(SUCCEEDED(m_pAllocator->GetStatic(&pStatic))
-                           && SUCCEEDED(RenderTo(pStatic, rtStart, rtStop, fps, false))
+                           && SUCCEEDED(RenderTo(pStatic, rtStart, rtStop, fps, bIsAnimated))
                            && SUCCEEDED(pStatic->CopyTo(pSubPic)))
                             ppSubPic = pSubPic;
                     }
                     else
                     {
-                        if(SUCCEEDED(RenderTo(m_pSubPic, rtStart, rtStop, fps, false)))
+                        if(SUCCEEDED(RenderTo(m_pSubPic, rtStart, rtStop, fps, bIsAnimated)))
                             ppSubPic = pSubPic;
                     }
                     if(SUCCEEDED(hr2))
@@ -1016,7 +1253,7 @@ void ISubPicAllocatorPresenterImpl::AlphaBltSubPic(CSize size, SubPicDesc* pTarg
     if(m_pSubPicQueue->LookupSubPic(m_rtNow, pSubPic))
     {
         CRect rcSource, rcDest;
-        if(SUCCEEDED(pSubPic->GetSourceAndDest(&size, rcSource, rcDest)))
+        if(SUCCEEDED(pSubPic->GetSourceAndDest(m_WindowRect, m_VideoRect, rcSource, rcDest)))
             pSubPic->AlphaBlt(rcSource, rcDest, pTarget);
         /*		SubPicDesc spd;
         		pSubPic->GetDesc(spd);

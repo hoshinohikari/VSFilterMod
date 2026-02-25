@@ -23,6 +23,28 @@
 #include "DirectVobSub.h"
 #include "VSFilter.h"
 
+static LPCTSTR DVS_RG_SUBPICTOBUFFER = _T("SubPictToBuffer");
+static LPCTSTR DVS_RG_ANIMWHENBUFFERING = _T("AnimWhenBuffering");
+static LPCTSTR DVS_RG_DISABLESUBTITLEANIMATION = _T("DisableSubtitleAnimation");
+static LPCTSTR DVS_RG_RENDERATWHENANIMATIONISDISABLED = _T("RenderAtWhenAnimationIsDisabled");
+static LPCTSTR DVS_RG_ANIMATIONRATE = _T("AnimationRate");
+static LPCTSTR DVS_RG_ALLOWDROPPINGSUBPIC = _T("AllowDroppingSubpic");
+
+static unsigned int ClampSubPictToBuffer(unsigned int uSubPictToBuffer)
+{
+    return min(max(uSubPictToBuffer, 1U), 120U);
+}
+
+static int ClampRenderAtWhenAnimationIsDisabled(int nRenderAtWhenAnimationIsDisabled)
+{
+    return min(max(nRenderAtWhenAnimationIsDisabled, 0), 100);
+}
+
+static int ClampAnimationRate(int nAnimationRate)
+{
+    return min(max(nAnimationRate, 1), 1000);
+}
+
 CDirectVobSub::CDirectVobSub()
 {
     AFX_MANAGE_STATE(AfxGetStaticModuleState());
@@ -33,6 +55,9 @@ CDirectVobSub::CDirectVobSub()
     m_iSelectedLanguage = 0;
     m_fHideSubtitles = !!theApp.GetProfileInt(ResStr(IDS_R_GENERAL), ResStr(IDS_RG_HIDE), 0);
     m_fDoPreBuffering = !!theApp.GetProfileInt(ResStr(IDS_R_GENERAL), ResStr(IDS_RG_DOPREBUFFERING), 0);
+    int nSubPictToBuffer = theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_SUBPICTOBUFFER, 10);
+    m_uSubPictToBuffer = ClampSubPictToBuffer((unsigned int)max(nSubPictToBuffer, 1));
+    m_fAnimWhenBuffering = !!theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ANIMWHENBUFFERING, 1);
     m_fOverridePlacement = !!theApp.GetProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_OVERRIDEPLACEMENT), 0);
     m_PlacementXperc = theApp.GetProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_XPERC), 50);
     m_PlacementYperc = theApp.GetProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_YPERC), 90);
@@ -62,10 +87,10 @@ CDirectVobSub::CDirectVobSub()
 
     m_fForced = false;
 
-    m_bDisableSubtitleAnimation = false;
-    m_nRenderAtWhenAnimationIsDisabled = 50;
-    m_nAnimationRate = 100;
-    m_bAllowDroppingSubpic = true;
+    m_bDisableSubtitleAnimation = !!theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_DISABLESUBTITLEANIMATION, 0);
+    m_nRenderAtWhenAnimationIsDisabled = ClampRenderAtWhenAnimationIsDisabled(theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_RENDERATWHENANIMATIONISDISABLED, 50));
+    m_nAnimationRate = ClampAnimationRate(theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ANIMATIONRATE, 100));
+    m_bAllowDroppingSubpic = !!theApp.GetProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ALLOWDROPPINGSUBPIC, 1);
 }
 
 CDirectVobSub::~CDirectVobSub()
@@ -432,6 +457,8 @@ STDMETHODIMP CDirectVobSub::UpdateRegistry()
 
     theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), ResStr(IDS_RG_HIDE), m_fHideSubtitles);
     theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), ResStr(IDS_RG_DOPREBUFFERING), m_fDoPreBuffering);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_SUBPICTOBUFFER, m_uSubPictToBuffer);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ANIMWHENBUFFERING, m_fAnimWhenBuffering);
     theApp.WriteProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_OVERRIDEPLACEMENT), m_fOverridePlacement);
     theApp.WriteProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_XPERC), m_PlacementXperc);
     theApp.WriteProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_YPERC), m_PlacementYperc);
@@ -450,6 +477,10 @@ STDMETHODIMP CDirectVobSub::UpdateRegistry()
     theApp.WriteProfileInt(ResStr(IDS_R_TIMING), ResStr(IDS_RTM_MEDIAFPSENABLED), m_fMediaFPSEnabled);
     theApp.WriteProfileBinary(ResStr(IDS_R_TIMING), ResStr(IDS_RTM_MEDIAFPS), (BYTE*)&m_MediaFPS, sizeof(m_MediaFPS));
     theApp.WriteProfileInt(ResStr(IDS_R_TEXT), ResStr(IDS_RT_AUTOPARCOMPENSATION), m_ePARCompensationType);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_DISABLESUBTITLEANIMATION, m_bDisableSubtitleAnimation);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_RENDERATWHENANIMATIONISDISABLED, m_nRenderAtWhenAnimationIsDisabled);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ANIMATIONRATE, m_nAnimationRate);
+    theApp.WriteProfileInt(ResStr(IDS_R_GENERAL), DVS_RG_ALLOWDROPPINGSUBPIC, m_bAllowDroppingSubpic);
 
     return S_OK;
 }
@@ -584,6 +615,43 @@ STDMETHODIMP CDirectVobSub::put_LoadSettings(int level, bool fExternalLoad, bool
     return S_OK;
 }
 
+STDMETHODIMP CDirectVobSub::get_SubPictToBuffer(unsigned int* uSubPictToBuffer)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return uSubPictToBuffer ? *uSubPictToBuffer = m_uSubPictToBuffer, S_OK : E_POINTER;
+}
+
+STDMETHODIMP CDirectVobSub::put_SubPictToBuffer(unsigned int uSubPictToBuffer)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    uSubPictToBuffer = ClampSubPictToBuffer(uSubPictToBuffer);
+    if(m_uSubPictToBuffer == uSubPictToBuffer)
+        return S_FALSE;
+
+    m_uSubPictToBuffer = uSubPictToBuffer;
+    return S_OK;
+}
+
+STDMETHODIMP CDirectVobSub::get_AnimWhenBuffering(bool* fAnimWhenBuffering)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    return fAnimWhenBuffering ? *fAnimWhenBuffering = m_fAnimWhenBuffering, S_OK : E_POINTER;
+}
+
+STDMETHODIMP CDirectVobSub::put_AnimWhenBuffering(bool fAnimWhenBuffering)
+{
+    CAutoLock cAutoLock(&m_propsLock);
+
+    if(m_fAnimWhenBuffering == fAnimWhenBuffering)
+        return S_FALSE;
+
+    m_fAnimWhenBuffering = fAnimWhenBuffering;
+    return S_OK;
+}
+
 // IDirectVobSub2
 
 STDMETHODIMP CDirectVobSub::AdviseSubClock(ISubClock* pSubClock)
@@ -677,6 +745,7 @@ STDMETHODIMP CDirectVobSub::put_RenderAtWhenAnimationIsDisabled(int nRenderAtWhe
 {
     CAutoLock cAutoLock(&m_propsLock);
 
+    nRenderAtWhenAnimationIsDisabled = ClampRenderAtWhenAnimationIsDisabled(nRenderAtWhenAnimationIsDisabled);
     if(m_nRenderAtWhenAnimationIsDisabled == nRenderAtWhenAnimationIsDisabled)
         return S_FALSE;
 
@@ -695,6 +764,7 @@ STDMETHODIMP CDirectVobSub::put_AnimationRate(int nAnimationRate)
 {
     CAutoLock cAutoLock(&m_propsLock);
 
+    nAnimationRate = ClampAnimationRate(nAnimationRate);
     if(m_nAnimationRate == nAnimationRate)
         return S_FALSE;
 

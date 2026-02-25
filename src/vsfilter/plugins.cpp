@@ -570,7 +570,15 @@ namespace AviSynth1
 class CAvisynthFilter : public GenericVideoFilter, virtual public CFilter
 {
 public:
-    CAvisynthFilter(PClip c, IScriptEnvironment* env) : GenericVideoFilter(c) {}
+    CAvisynthFilter(PClip c, IScriptEnvironment* env)
+        : GenericVideoFilter(c)
+        , m_isRGBA(env->GetVar("RGBA").AsBool())
+        , m_defaultFps(vi.fps_denominator ? (float)vi.fps_numerator / vi.fps_denominator : 0.0f) {
+    }
+
+protected:
+    bool m_isRGBA;
+    float m_defaultFps;
 
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env)
     {
@@ -585,12 +593,12 @@ public:
         dst.bits = frame->GetWritePtr();
         dst.bpp = vi.BitsPerPixel();
         dst.type =
-            vi.IsRGB32() ? (env->GetVar("RGBA").AsBool() ? MSP_RGBA : MSP_RGB32) :
+            vi.IsRGB32() ? (m_isRGBA ? MSP_RGBA : MSP_RGB32) :
                 vi.IsRGB24() ? MSP_RGB24 :
                 vi.IsYUY2() ? MSP_YUY2 :
                 -1;
 
-        float fps = m_fps > 0 ? m_fps : (float)vi.fps_numerator / vi.fps_denominator;
+        float fps = m_fps > 0 ? m_fps : m_defaultFps;
 
         Render(dst, (REFERENCE_TIME)(10000000i64 * n / fps), fps);
 
@@ -706,7 +714,16 @@ class CAvisynthFilter : public GenericVideoFilter, virtual public CFilter
 public:
     VFRTranslator *vfr;
 
-    CAvisynthFilter(PClip c, IScriptEnvironment* env, VFRTranslator *_vfr = 0) : GenericVideoFilter(c), vfr(_vfr) {}
+    CAvisynthFilter(PClip c, IScriptEnvironment* env, VFRTranslator *_vfr = 0)
+        : GenericVideoFilter(c)
+        , vfr(_vfr)
+        , m_isRGBA(env->GetVar("RGBA").AsBool())
+        , m_defaultFps(vi.fps_denominator ? (float)vi.fps_numerator / vi.fps_denominator : 0.0f) {
+    }
+
+protected:
+    bool m_isRGBA;
+    float m_defaultFps;
 
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env)
     {
@@ -724,14 +741,14 @@ public:
         dst.bitsV = frame->GetWritePtr(::PLANAR_V);
         dst.bpp = dst.pitch / dst.w * 8; //vi.BitsPerPixel();
         dst.type =
-            vi.IsRGB32() ? (env->GetVar("RGBA").AsBool() ? MSP_RGBA : MSP_RGB32)  :
+            vi.IsRGB32() ? (m_isRGBA ? MSP_RGBA : MSP_RGB32)  :
                 vi.IsRGB24() ? MSP_RGB24 :
                 vi.IsYUY2() ? MSP_YUY2 :
         /*vi.IsYV12()*/ vi.pixel_type == ::VideoInfo::CS_YV12 ? (s_fSwapUV ? MSP_IYUV : MSP_YV12) :
         /*vi.IsIYUV()*/ vi.pixel_type == ::VideoInfo::CS_IYUV ? (s_fSwapUV ? MSP_YV12 : MSP_IYUV) :
                 -1;
 
-        float fps = m_fps > 0 ? m_fps : (float)vi.fps_numerator / vi.fps_denominator;
+        float fps = m_fps > 0 ? m_fps : m_defaultFps;
 
         REFERENCE_TIME timestamp;
 
@@ -1247,6 +1264,33 @@ namespace VapourSynth {
 		}
 	};
 
+    class VSFYUV8DirectBuf : public VSFFrameBuf
+    {
+        const VSAPI* api;
+        const VSFilterData* d;
+
+    public:
+        VSFYUV8DirectBuf(const VSAPI* api, const VSFilterData* d, VSFrame* frame)
+            : api(api)
+            , d(d)
+        {
+            subpic.w = d->vi->width;
+            subpic.h = d->vi->height;
+            subpic.pitch = api->getStride(frame, 0);
+            subpic.pitchUV = api->getStride(frame, 1);
+            subpic.bits = api->getWritePtr(frame, 0);
+            subpic.bitsU = api->getWritePtr(frame, 1);
+            subpic.bitsV = api->getWritePtr(frame, 2);
+            subpic.bpp = 8;
+            subpic.type = MSP_YV12;
+        }
+
+        void WriteTo(VSFrame* frame) override
+        {
+            UNREFERENCED_PARAMETER(frame);
+        }
+    };
+
     static const VSFrame *VS_CC vsfilterGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
         const VSFilterData * d = static_cast<const VSFilterData *>(instanceData);
 
@@ -1265,7 +1309,7 @@ namespace VapourSynth {
             else if (d->vi->format.colorFamily == cfYUV)
 			{
                 if (vsh::isSameVideoPresetFormat(pfYUV420P8, &d->vi->format, core, vsapi))
-					frameBuf.reset(new VSFYUVBuf<8>(vsapi, core, d, src));
+                    frameBuf.reset(new VSFYUV8DirectBuf(vsapi, d, dst));
                 else if (vsh::isSameVideoPresetFormat(pfYUV420P10, &d->vi->format, core, vsapi))
 					frameBuf.reset(new VSFYUVBuf<10>(vsapi, core, d, src));
                 else if (vsh::isSameVideoPresetFormat(pfYUV420P16, &d->vi->format, core, vsapi))
@@ -1433,7 +1477,7 @@ UINT_PTR CALLBACK OpenHookProc(HWND hDlg, UINT uiMsg, WPARAM wParam, LPARAM lPar
         {
             CString s;
             s.Format(_T("%s (%d)"), CharSetNames[i], CharSetList[i]);
-            SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_ADDSTRING, 0, (LONG)(LPCTSTR)s);
+            SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)s);
             if(CharSetList[i] == (int)((OPENFILENAME*)lParam)->lCustData)
                 SendMessage(GetDlgItem(hDlg, IDC_COMBO1), CB_SETCURSEL, i, 0);
         }

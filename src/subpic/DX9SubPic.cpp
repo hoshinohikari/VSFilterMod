@@ -131,21 +131,23 @@ STDMETHODIMP CDX9SubPic::ClearDirtyRect(DWORD color)
 
         if(spd.bpp == 16)
         {
+            const WORD actualColor = m_bInvAlpha ? 0x0000 : (WORD)color;
             while(h-- > 0)
             {
                 WORD* start = (WORD*)ptr;
                 WORD* end = start + m_rcDirty.Width();
-                while(start < end) *start++ = (WORD)color;
+                while(start < end) *start++ = actualColor;
                 ptr += spd.pitch;
             }
         }
         else if(spd.bpp == 32)
         {
+            const DWORD actualColor = m_bInvAlpha ? 0x00000000 : color;
             while(h-- > 0)
             {
                 DWORD* start = (DWORD*)ptr;
                 DWORD* end = start + m_rcDirty.Width();
-                while(start < end) *start++ = color;
+                while(start < end) *start++ = actualColor;
                 ptr += spd.pitch;
             }
         }
@@ -274,7 +276,7 @@ STDMETHODIMP CDX9SubPic::AlphaBlt(RECT* pSrc, RECT* pDst, SubPicDesc* pTarget)
         hr = pD3DDev->SetRenderState(D3DRS_ZENABLE, FALSE);
         hr = pD3DDev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
         hr = pD3DDev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); // pre-multiplied src and ...
-        hr = pD3DDev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_SRCALPHA); // ... inverse alpha channel for dst
+        hr = pD3DDev->SetRenderState(D3DRS_DESTBLEND, m_bInvAlpha ? D3DBLEND_INVSRCALPHA : D3DBLEND_SRCALPHA); // ... inverse alpha channel for dst
 
         hr = pD3DDev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
         hr = pD3DDev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -437,6 +439,7 @@ bool CDX9SubPicAllocator::Alloc(bool fStatic, ISubPic** ppSubPic)
         return(false);
 
     (*ppSubPic)->AddRef();
+    (*ppSubPic)->SetInverseAlpha(m_bInvAlpha);
 
     if(!fStatic)
     {

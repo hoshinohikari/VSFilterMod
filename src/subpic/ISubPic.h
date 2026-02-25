@@ -24,6 +24,7 @@
 #include <atlbase.h>
 #include <atlcoll.h>
 #include "CoordGeom.h"
+#include "SubPicQueueSettings.h"
 
 #pragma pack(push, 1)
 struct SubPicDesc
@@ -38,6 +39,13 @@ struct SubPicDesc
 	struct SubPicDesc() {type = 0; w = h = bpp = pitch = pitchUV = 0; bits = NULL; bitsU = bitsV = NULL;}
 };
 #pragma pack(pop)
+
+enum RelativeTo
+{
+	WINDOW,
+	VIDEO,
+	BEST_FIT
+};
 
 //
 // ISubPic
@@ -67,8 +75,14 @@ interface ISubPic : public IUnknown
 	STDMETHOD (Unlock) (RECT* pDirtyRect /*[in]*/) PURE;
 
 	STDMETHOD (AlphaBlt) (RECT* pSrc, RECT* pDst, SubPicDesc* pTarget = NULL /*[in]*/) PURE;
-	STDMETHOD (GetSourceAndDest) (SIZE* pSize /*[in]*/, RECT* pRcSource /*[out]*/, RECT* pRcDest /*[out]*/) PURE;
+	STDMETHOD (GetSourceAndDest) (RECT rcWindow /*[in]*/, RECT rcVideo /*[in]*/,
+							RECT* pRcSource /*[out]*/, RECT* pRcDest /*[out]*/,
+							const double videoStretchFactor = 1.0 /*[in]*/,
+							int xOffsetInPixels = 0 /*[in]*/, int yOffsetInPixels = 0 /*[in]*/) PURE;
 	STDMETHOD (SetVirtualTextureSize) (const SIZE pSize, const POINT pTopLeft) PURE;
+	STDMETHOD (GetRelativeTo) (RelativeTo* pRelativeTo /*[out]*/) PURE;
+	STDMETHOD (SetRelativeTo) (RelativeTo relativeTo /*[in]*/) PURE;
+	STDMETHOD_(void, SetInverseAlpha) (bool bInverted) PURE;
 
 	STDMETHOD_(REFERENCE_TIME, GetSegmentStart) () PURE;
 	STDMETHOD_(REFERENCE_TIME, GetSegmentStop) () PURE;
@@ -87,6 +101,8 @@ protected:
 	CRect	m_vidrect;
 	CSize	m_VirtualTextureSize;
 	CPoint	m_VirtualTextureTopLeft;
+	RelativeTo m_relativeTo;
+	bool m_bInvAlpha;
 
 /*
 
@@ -147,7 +163,11 @@ public:
 	STDMETHODIMP AlphaBlt(RECT* pSrc, RECT* pDst, SubPicDesc* pTarget) = 0;
 
 	STDMETHODIMP SetVirtualTextureSize (const SIZE pSize, const POINT pTopLeft);
-	STDMETHODIMP GetSourceAndDest(SIZE* pSize, RECT* pRcSource, RECT* pRcDest);
+	STDMETHODIMP GetSourceAndDest(RECT rcWindow, RECT rcVideo, RECT* pRcSource, RECT* pRcDest,
+						const double videoStretchFactor = 1.0, int xOffsetInPixels = 0, int yOffsetInPixels = 0);
+	STDMETHODIMP GetRelativeTo(RelativeTo* pRelativeTo);
+	STDMETHODIMP SetRelativeTo(RelativeTo relativeTo);
+	STDMETHODIMP_(void) SetInverseAlpha(bool bInverted);
 
 	STDMETHODIMP_(REFERENCE_TIME) GetSegmentStart();
 	STDMETHODIMP_(REFERENCE_TIME) GetSegmentStop();
@@ -173,6 +193,7 @@ interface ISubPicAllocator : public IUnknown
 
 	STDMETHOD (ChangeDevice) (IUnknown* pDev) PURE;
 	STDMETHOD (SetMaxTextureSize) (SIZE MaxTextureSize) PURE;
+	STDMETHOD_(void, SetInverseAlpha) (bool bInverted) PURE;
 };
 
 
@@ -189,6 +210,7 @@ private:
 
 protected:
 	bool m_fPow2Textures;
+	bool m_bInvAlpha;
 
 public:
 	ISubPicAllocatorImpl(SIZE cursize, bool fDynamicWriteOnly, bool fPow2Textures);
@@ -205,6 +227,7 @@ public:
 	STDMETHODIMP_(bool) IsDynamicWriteOnly();
 	STDMETHODIMP ChangeDevice(IUnknown* pDev);
 	STDMETHODIMP SetMaxTextureSize(SIZE MaxTextureSize) { return E_NOTIMPL; };
+	STDMETHODIMP_(void) SetInverseAlpha(bool bInverted);
 };
 
 //
@@ -285,12 +308,14 @@ protected:
 	double m_fps;
 	REFERENCE_TIME m_rtNow;
 	REFERENCE_TIME m_rtNowLast;
+	SubPicQueueSettings m_settings;
 
 	CComPtr<ISubPicAllocator> m_pAllocator;
 
 	HRESULT RenderTo(ISubPic* pSubPic, REFERENCE_TIME rtStart, REFERENCE_TIME rtStop, double fps, BOOL bIsAnimated);
 
 public:
+	ISubPicQueueImpl(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr);
 	ISubPicQueueImpl(ISubPicAllocator* pAllocator, HRESULT* phr);
 	virtual ~ISubPicQueueImpl();
 
@@ -337,6 +362,7 @@ class CSubPicQueue : public ISubPicQueueImpl, private CAMThread
     DWORD ThreadProc();
 
 public:
+	CSubPicQueue(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr);
 	CSubPicQueue(int nMaxSubPic, BOOL bDisableAnim, ISubPicAllocator* pAllocator, HRESULT* phr);
 	virtual ~CSubPicQueue();
 
@@ -358,6 +384,7 @@ class CSubPicQueueNoThread : public ISubPicQueueImpl
 	CComPtr<ISubPic> m_pSubPic;
 
 public:
+	CSubPicQueueNoThread(SubPicQueueSettings settings, ISubPicAllocator* pAllocator, HRESULT* phr);
 	CSubPicQueueNoThread(ISubPicAllocator* pAllocator, HRESULT* phr);
 	virtual ~CSubPicQueueNoThread();
 

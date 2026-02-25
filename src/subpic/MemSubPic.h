@@ -22,6 +22,8 @@
 #pragma once
 
 #include "ISubPic.h"
+#include <vector>
+#include <utility>
 
 enum {MSP_RGB32, MSP_RGB24, MSP_RGB16, MSP_RGB15, MSP_YUY2, MSP_YV12, MSP_IYUV, MSP_AYUV, MSP_RGBA};
 enum YCbCrMatrix
@@ -39,9 +41,11 @@ enum YCbCrRange
 };
 // CMemSubPic
 
+class CMemSubPicAllocator;
 class CMemSubPic : public ISubPicImpl
 {
 #pragma warning(disable: 4799)
+    CComPtr<CMemSubPicAllocator> m_pAllocator;
     SubPicDesc m_spd;
     int    m_eYCbCrMatrix;
     int     m_eYCbCrRange;
@@ -50,7 +54,7 @@ protected:
     STDMETHODIMP_(void*) GetObject(); // returns SubPicDesc*
 
 public:
-    CMemSubPic(SubPicDesc& spd, int inYCbCrMatrix, int inYCbCrRange);
+    CMemSubPic(SubPicDesc& spd, CMemSubPicAllocator* pAllocator, int inYCbCrMatrix, int inYCbCrRange);
     virtual ~CMemSubPic();
 
     // ISubPic
@@ -64,16 +68,22 @@ public:
 
 // CMemSubPicAllocator
 
-class CMemSubPicAllocator : public ISubPicAllocatorImpl
+class CMemSubPicAllocator : public ISubPicAllocatorImpl, public CCritSec
 {
     int m_type;
     CSize m_maxsize;
     int    m_eYCbCrMatrix;
     int     m_eYCbCrRange;
 
+    std::vector<std::pair<size_t, BYTE*>> m_freeMemoryChunks;
+
     bool Alloc(bool fStatic, ISubPic** ppSubPic);
 
 public:
     CMemSubPicAllocator(int type, SIZE maxsize, int inYCbCrMatrix=YCbCrMatrix_BT601, int inYCbCrRange=YCbCrRange_TV);
+    virtual ~CMemSubPicAllocator();
+
+    bool AllocSpdBits(SubPicDesc& spd);
+    void FreeSpdBits(SubPicDesc& spd);
 };
 

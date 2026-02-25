@@ -69,7 +69,15 @@ public:
     void CreateLuaState();
     void LoadLuaFile(CString File);
 
+    bool IsLuaEnabled(lua_State* LuaState = NULL);
+    void DisableLua(lua_State* LuaState, CString Reason);
+    bool LuaPCall(lua_State* LuaState, int nargs, int nresults, int errfunc, CString Context);
+
     void LuaError(CString Text);
+
+private:
+    bool IsLuaStateDisabled(lua_State* LuaState);
+    void MarkLuaStateDisabled(lua_State* LuaState);
 };
 #endif
 #endif

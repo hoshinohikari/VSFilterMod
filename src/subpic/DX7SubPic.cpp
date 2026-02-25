@@ -85,7 +85,7 @@ STDMETHODIMP CDX7SubPic::ClearDirtyRect(DWORD color)
 
     DDBLTFX fx;
     INITDDSTRUCT(fx);
-    fx.dwFillColor = color;
+    fx.dwFillColor = m_bInvAlpha ? 0x00000000 : color;
     m_pSurface->Blt(&m_rcDirty, NULL, NULL, DDBLT_WAIT | DDBLT_COLORFILL, &fx);
 
     m_rcDirty.SetRectEmpty();
@@ -175,7 +175,7 @@ STDMETHODIMP CDX7SubPic::AlphaBlt(RECT* pSrc, RECT* pDst, SubPicDesc* pTarget)
         m_pD3DDev->SetRenderState(D3DRENDERSTATE_LIGHTING, FALSE);
         m_pD3DDev->SetRenderState(D3DRENDERSTATE_BLENDENABLE, TRUE);
         m_pD3DDev->SetRenderState(D3DRENDERSTATE_SRCBLEND, D3DBLEND_ONE); // pre-multiplied src and ...
-        m_pD3DDev->SetRenderState(D3DRENDERSTATE_DESTBLEND, D3DBLEND_SRCALPHA); // ... inverse alpha channel for dst
+        m_pD3DDev->SetRenderState(D3DRENDERSTATE_DESTBLEND, m_bInvAlpha ? D3DBLEND_INVSRCALPHA : D3DBLEND_SRCALPHA); // ... inverse alpha channel for dst
 
         m_pD3DDev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
         m_pD3DDev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -289,6 +289,7 @@ bool CDX7SubPicAllocator::Alloc(bool fStatic, ISubPic** ppSubPic)
         return(false);
 
     (*ppSubPic)->AddRef();
+    (*ppSubPic)->SetInverseAlpha(m_bInvAlpha);
 
     return(true);
 }

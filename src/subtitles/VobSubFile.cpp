@@ -439,7 +439,7 @@ bool CVobSubFile::ReadIdx(CString fn, int& ver)
             int i = str.Find(buff);
             if(i >= 0)
             {
-                _stscanf(&s[i+_tcslen(buff)], _T("%d, %d (PTS: %d)"), &vobid, &cellid, &celltimestamp);
+                _stscanf(&s[i+_tcslen(buff)], _T("%d, %d (PTS: %I64d)"), &vobid, &cellid, &celltimestamp);
             }
 
             continue;
@@ -563,12 +563,14 @@ bool CVobSubFile::ReadIdx(CString fn, int& ver)
         }
         else if(entry == _T("palette"))
         {
+            unsigned int orgpal[16] = {};
             if(_stscanf(str, _T("%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x"),
-                        &m_orgpal[0], &m_orgpal[1], &m_orgpal[2], &m_orgpal[3],
-                        &m_orgpal[4], &m_orgpal[5], &m_orgpal[6], &m_orgpal[7],
-                        &m_orgpal[8], &m_orgpal[9], &m_orgpal[10], &m_orgpal[11],
-                        &m_orgpal[12], &m_orgpal[13], &m_orgpal[14], &m_orgpal[15]
+                        &orgpal[0], &orgpal[1], &orgpal[2], &orgpal[3],
+                        &orgpal[4], &orgpal[5], &orgpal[6], &orgpal[7],
+                        &orgpal[8], &orgpal[9], &orgpal[10], &orgpal[11],
+                        &orgpal[12], &orgpal[13], &orgpal[14], &orgpal[15]
                        ) != 16) fError = true;
+            else memcpy(m_orgpal, orgpal, sizeof(orgpal));
         }
         else if(entry == _T("custom colors"))
         {
@@ -603,11 +605,14 @@ bool CVobSubFile::ReadIdx(CString fn, int& ver)
             str = str.Mid(i + (int)_tcslen(_T("colors:")));
 
             RGBQUAD pal[4];
-            if(_stscanf(str, _T("%x,%x,%x,%x"), &pal[0], &pal[1], &pal[2], &pal[3]) != 4)
+            unsigned int palData[4] = {};
+            if(_stscanf(str, _T("%x,%x,%x,%x"), &palData[0], &palData[1], &palData[2], &palData[3]) != 4)
             {
                 fError = true;
                 continue;
             }
+
+            memcpy(pal, palData, sizeof(palData));
 
             SetCustomPal(pal, tridx);
         }
@@ -1027,7 +1032,7 @@ bool CVobSubFile::WriteIdx(CString fn)
 
             if(sp[j].vobid != vobid || sp[j].cellid != cellid)
             {
-                str.Format(_T("# Vob/Cell ID: %d, %d (PTS: %d)\n"), sp[j].vobid, sp[j].cellid, sp[j].celltimestamp);
+                str.Format(_T("# Vob/Cell ID: %d, %d (PTS: %I64d)\n"), sp[j].vobid, sp[j].cellid, sp[j].celltimestamp);
                 f.WriteString(str);
                 vobid = sp[j].vobid;
                 cellid = sp[j].cellid;
@@ -1227,6 +1232,24 @@ STDMETHODIMP CVobSubFile::NonDelegatingQueryInterface(REFIID riid, void** ppv)
 
 // TODO: return segments for the fade-in/out time (with animated set to "true" of course)
 
+namespace
+{
+inline POSITION VobIndexToPositionToken(int index)
+{
+    return reinterpret_cast<POSITION>(static_cast<INT_PTR>(index + 1));
+}
+
+inline int VobPositionTokenToNextIndex(POSITION pos)
+{
+    return static_cast<int>(reinterpret_cast<INT_PTR>(pos));
+}
+
+inline int VobPositionTokenToIndex(POSITION pos)
+{
+    return static_cast<int>(reinterpret_cast<INT_PTR>(pos) - 1);
+}
+}
+
 STDMETHODIMP_(POSITION) CVobSubFile::GetStartPosition(REFERENCE_TIME rt, double fps)
 {
     rt /= 10000;
@@ -1242,24 +1265,24 @@ STDMETHODIMP_(POSITION) CVobSubFile::GetStartPosition(REFERENCE_TIME rt, double 
             return(NULL);
     }
 
-    return((POSITION)(i + 1));
+    return(VobIndexToPositionToken(i));
 }
 
 STDMETHODIMP_(POSITION) CVobSubFile::GetNext(POSITION pos)
 {
-    int i = (int)pos;
-    return(GetFrame(i) ? (POSITION)(i + 1) : NULL);
+    const int i = VobPositionTokenToNextIndex(pos);
+    return(GetFrame(i) ? VobIndexToPositionToken(i) : NULL);
 }
 
 STDMETHODIMP_(REFERENCE_TIME) CVobSubFile::GetStart(POSITION pos, double fps)
 {
-    int i = (int)pos - 1;
+    const int i = VobPositionTokenToIndex(pos);
     return(GetFrame(i) ? 10000i64 * m_img.start : 0);
 }
 
 STDMETHODIMP_(REFERENCE_TIME) CVobSubFile::GetStop(POSITION pos, double fps)
 {
-    int i = (int)pos - 1;
+    const int i = VobPositionTokenToIndex(pos);
     return(GetFrame(i) ? 10000i64 * (m_img.start + m_img.delay) : 0);
 }
 
@@ -1844,10 +1867,12 @@ bool CVobSubFile::SaveScenarist(CString fn)
         {125, 0, 125, 0},
     };
 
+    const DWORD bitmapDataSize = static_cast<DWORD>(max(m_size.cy - 2, 0) * 360);
+
     BITMAPFILEHEADER fhdr =
     {
         0x4d42,
-        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD) + 360 *(m_size.cy - 2),
+        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD) + bitmapDataSize,
         0, 0,
         sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD)
     };
@@ -1856,7 +1881,7 @@ bool CVobSubFile::SaveScenarist(CString fn)
     {
         sizeof(BITMAPINFOHEADER),
         720, m_size.cy - 2, 1, 4, 0,
-        360 *(m_size.cy - 2),
+        bitmapDataSize,
         0, 0,
         16, 4
     };
@@ -2086,10 +2111,12 @@ bool CVobSubFile::SaveMaestro(CString fn)
 
     f.Flush();
 
+    const DWORD bitmapDataSize = static_cast<DWORD>(max(m_size.cy - 2, 0) * 360);
+
     BITMAPFILEHEADER fhdr =
     {
         0x4d42,
-        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD) + 360 *(m_size.cy - 2),
+        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD) + bitmapDataSize,
         0, 0,
         sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 16 * sizeof(RGBQUAD)
     };
@@ -2098,7 +2125,7 @@ bool CVobSubFile::SaveMaestro(CString fn)
     {
         sizeof(BITMAPINFOHEADER),
         720, m_size.cy - 2, 1, 4, 0,
-        360 *(m_size.cy - 2),
+        bitmapDataSize,
         0, 0,
         16, 4
     };
@@ -2279,6 +2306,7 @@ bool CVobSubFile::SaveMaestro(CString fn)
 
 CVobSubStream::CVobSubStream(CCritSec* pLock)
     : ISubPicProviderImpl(pLock)
+    , m_lastRenderedPos(NULL)
 {
 }
 
@@ -2328,7 +2356,7 @@ void CVobSubStream::Open(CString name, BYTE* pData, int len)
             }
         }
         else if(key == _T("fade in/out"))
-            _stscanf(value, _T("%d%, %d%"), &m_fadein, &m_fadeout);
+            _stscanf(value, _T("%d%%, %d%%"), &m_fadein, &m_fadeout);
         else if(key == _T("time offset"))
             m_toff = _tcstol(value, NULL, 10);
         else if(key == _T("forced subs"))
@@ -2337,7 +2365,10 @@ void CVobSubStream::Open(CString name, BYTE* pData, int len)
         {
             Explode(value, sl, ',', 16);
             for(ptrdiff_t i = 0; i < 16 && sl.GetCount(); i++)
-                *(DWORD*)&m_orgpal[i] = _tcstol(sl.RemoveHead(), NULL, 16);
+            {
+                DWORD pal = static_cast<DWORD>(_tcstoul(sl.RemoveHead(), NULL, 16));
+                memcpy(&m_orgpal[i], &pal, sizeof(pal));
+            }
         }
         else if(key == _T("custom colors"))
         {
@@ -2359,7 +2390,10 @@ void CVobSubStream::Open(CString name, BYTE* pData, int len)
                 {
                     Explode(colors.RemoveHead(), colors, ',', 4);
                     for(ptrdiff_t i = 0; i < 4 && colors.GetCount(); i++)
-                        *(DWORD*)&m_cuspal[i] = _tcstol(colors.RemoveHead(), NULL, 16);
+                    {
+                        DWORD pal = static_cast<DWORD>(_tcstoul(colors.RemoveHead(), NULL, 16));
+                        memcpy(&m_cuspal[i], &pal, sizeof(pal));
+                    }
                 }
             }
         }
@@ -2383,16 +2417,17 @@ void CVobSubStream::Add(REFERENCE_TIME tStart, REFERENCE_TIME tStop, BYTE* pData
     while(m_subpics.GetCount() && m_subpics.GetTail()->tStart >= tStart)
     {
         m_subpics.RemoveTail();
-        m_img.iIdx = -1;
+        m_lastRenderedPos = NULL;
     }
     m_subpics.AddTail(p);
+    m_lastRenderedPos = NULL;
 }
 
 void CVobSubStream::RemoveAll()
 {
     CAutoLock cAutoLock(&m_csSubPics);
     m_subpics.RemoveAll();
-    m_img.iIdx = -1;
+    m_lastRenderedPos = NULL;
 }
 
 STDMETHODIMP CVobSubStream::NonDelegatingQueryInterface(REFIID riid, void** ppv)
@@ -2459,13 +2494,13 @@ STDMETHODIMP CVobSubStream::Render(SubPicDesc& spd, REFERENCE_TIME rt, double fp
         SubPic* sp = m_subpics.GetAt(pos);
         if(sp->tStart <= rt && rt < sp->tStop)
         {
-            if(m_img.iIdx != (int)pos)
+            if(m_lastRenderedPos != pos)
             {
                 BYTE* pData = sp->pData.GetData();
                 m_img.Decode(
                     pData, (pData[0] << 8) | pData[1], (pData[2] << 8) | pData[3],
                     m_fCustomPal, m_tridx, m_orgpal, m_cuspal, true);
-                m_img.iIdx = (int)pos;
+                m_lastRenderedPos = pos;
             }
 
             return __super::Render(spd, bbox);

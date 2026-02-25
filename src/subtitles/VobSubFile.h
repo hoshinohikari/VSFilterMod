@@ -161,6 +161,7 @@ class CVobSubStream : public CVobSubSettings, public ISubStream, public ISubPicP
         CAtlArray<BYTE> pData;
     };
     CAutoPtrList<SubPic> m_subpics;
+    POSITION m_lastRenderedPos;
 
 public:
     CVobSubStream(CCritSec* pLock);

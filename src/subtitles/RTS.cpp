@@ -287,13 +287,9 @@ void CWord::CustomTransform(CPoint org, CString F, int Layer)
                 lua_pop(L, 1);
         }
 
-        if (lua_pcall(L, 1, 1, 0) != 0)
+        if (!LuaPCall(L, 1, 1, 0, L"customtransform"))
         {
-	        // error
-	        CString ErrorText = L"Error: ";
-	        CString LuaErrorText(lua_tostring(L, -1));
-            lua_pop(L, 1);
-	        LuaError(ErrorText + LuaErrorText);
+            break;
         }
         else
         {
@@ -1237,16 +1233,7 @@ void CClipper::ParseLuaTable(STSStyle& style, CPoint & pos, CPoint & org)
                 else
                     lua_pop(L, 1);
             }
-            if (lua_pcall(L, 1, 1, 0) != 0)
-            {
-                // error
-                CString ErrorText = L"Error: ";
-                CString LuaErrorText(lua_tostring(L, -1));
-
-                LuaError(ErrorText + LuaErrorText);
-                lua_pop(L, 1);
-            }
-            else
+            if (LuaPCall(L, 1, 1, 0, L"clipstyle"))
             {
                 // Retrieve result
                 if (!lua_istable(L, -1))
@@ -1425,7 +1412,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             DWORD a = 0xff - w->m_style.alpha[3];
             if(alpha > 0) a = MulDiv(a, 0xff - alpha, 0xff);
             COLORREF shadow = revcolor(w->m_style.colors[3]) | (a << 24);
-            DWORD sw[6] = {shadow, -1};
+            DWORD sw[6] = {shadow, 0xFFFFFFFFu};
 
 #ifdef _VSMOD // patch m011. jitter
             CPoint mod_jitter = w->m_style.mod_jitter.getOffset(rt);
@@ -1498,7 +1485,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             DWORD aoutline = w->m_style.alpha[2];
             if(alpha > 0) aoutline += MulDiv(alpha, 0xff - w->m_style.alpha[2], 0xff);
             COLORREF outline = revcolor(w->m_style.colors[2]) | ((0xff - aoutline) << 24);
-            DWORD sw[6] = {outline, -1};
+            DWORD sw[6] = {outline, 0xFFFFFFFFu};
 
 #ifdef _VSMOD // patch m011. jitter
             CPoint mod_jitter = w->m_style.mod_jitter.getOffset(rt);
@@ -2563,15 +2550,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 CStringA Param(params[arg]);
                 lua_pushstring(L, Param); 
             }
-            if (lua_pcall(L, params.GetCount() + 1, 1, 0) != 0)
-            {
-                // error
-                CString ErrorText = L"Error: ";
-                CString LuaErrorText(lua_tostring(L, -1));
-                lua_pop(L, 1);
-                LuaError(ErrorText + LuaErrorText);
-            }
-            else
+            if (LuaPCall(L, params.GetCount() + 1, 1, 0, L"line function"))
             {
                 // Retrieve result
                 if (!lua_istable(L, -1))
@@ -3372,15 +3351,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                         CStringA Param(params[arg]);
                         lua_pushstring(L, Param); 
                     }
-                    if (lua_pcall(L, params.GetCount(), 1, 0) != 0)
-                    {
-                        // error
-                        CString ErrorText = L"Error: ";
-                        CString LuaErrorText(lua_tostring(L, -1));
-                        lua_pop(L, 1);
-                        LuaError(ErrorText + LuaErrorText);
-                    }
-                    else
+                    if (LuaPCall(L, params.GetCount(), 1, 0, L"lua tag"))
                     {
                         // Retrieve result
                         if (!lua_istable(L, -1))
@@ -4153,6 +4124,24 @@ STDMETHODIMP CRenderedTextSubtitle::NonDelegatingQueryInterface(REFIID riid, voi
 
 // ISubPicProvider
 
+namespace
+{
+inline POSITION SegmentToPositionToken(int segment)
+{
+    return reinterpret_cast<POSITION>(static_cast<INT_PTR>(segment + 1));
+}
+
+inline POSITION SegmentToSeedPosition(int segment)
+{
+    return reinterpret_cast<POSITION>(static_cast<INT_PTR>(segment));
+}
+
+inline int PositionToRawSegment(POSITION pos)
+{
+    return static_cast<int>(reinterpret_cast<INT_PTR>(pos));
+}
+}
+
 STDMETHODIMP_(POSITION) CRenderedTextSubtitle::GetStartPosition(REFERENCE_TIME rt, double fps)
 {
     int iSegment = -1;
@@ -4160,28 +4149,28 @@ STDMETHODIMP_(POSITION) CRenderedTextSubtitle::GetStartPosition(REFERENCE_TIME r
 
     if(iSegment < 0) iSegment = 0;
 
-    return(GetNext((POSITION)iSegment));
+    return(GetNext(SegmentToSeedPosition(iSegment)));
 }
 
 STDMETHODIMP_(POSITION) CRenderedTextSubtitle::GetNext(POSITION pos)
 {
-    int iSegment = (int)pos;
+    int iSegment = PositionToRawSegment(pos);
 
     const STSSegment* stss;
     while((stss = GetSegment(iSegment)) && stss->subs.GetCount() == 0)
         iSegment++;
 
-    return(stss ? (POSITION)(iSegment + 1) : NULL);
+    return(stss ? SegmentToPositionToken(iSegment) : NULL);
 }
 
 STDMETHODIMP_(REFERENCE_TIME) CRenderedTextSubtitle::GetStart(POSITION pos, double fps)
 {
-    return(10000i64 * TranslateSegmentStart((int)pos - 1, fps));
+    return(10000i64 * TranslateSegmentStart(PositionToRawSegment(pos) - 1, fps));
 }
 
 STDMETHODIMP_(REFERENCE_TIME) CRenderedTextSubtitle::GetStop(POSITION pos, double fps)
 {
-    return(10000i64 * TranslateSegmentEnd((int)pos - 1, fps));
+    return(10000i64 * TranslateSegmentEnd(PositionToRawSegment(pos) - 1, fps));
 }
 
 STDMETHODIMP_(bool) CRenderedTextSubtitle::IsAnimated(POSITION pos)

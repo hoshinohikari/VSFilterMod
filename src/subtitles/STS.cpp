@@ -1797,49 +1797,155 @@ static bool LoadUUEFont(CTextFile* file)
 #ifdef _LUA
 //////////////////////////////////////////////////////////////////////////////////////////////
 
+namespace
+{
+const char* VSFILTERMOD_LUA_DISABLED_KEY = "vsfiltermod.lua.disabled";
+}
+
 // CMyLua
 CMyLua::CMyLua()
+    : L(NULL)
+    , LuaLog(NULL)
 {
-
 }
 
 void CMyLua::CreateLuaState()
 {
-    L = luaL_newstate ();
+    L = luaL_newstate();
+    if (!L) {
+        LuaError(L"Could not create Lua state");
+        return;
+    }
+
     // load the libs
     luaL_openlibs(L);
+
+    lua_pushboolean(L, 0);
+    lua_setfield(L, LUA_REGISTRYINDEX, VSFILTERMOD_LUA_DISABLED_KEY);
+}
+
+bool CMyLua::IsLuaStateDisabled(lua_State* LuaState)
+{
+    if (!LuaState) {
+        return true;
+    }
+
+    lua_getfield(LuaState, LUA_REGISTRYINDEX, VSFILTERMOD_LUA_DISABLED_KEY);
+    bool disabled = !!lua_toboolean(LuaState, -1);
+    lua_pop(LuaState, 1);
+    return disabled;
+}
+
+void CMyLua::MarkLuaStateDisabled(lua_State* LuaState)
+{
+    if (!LuaState) {
+        return;
+    }
+
+    lua_pushboolean(LuaState, 1);
+    lua_setfield(LuaState, LUA_REGISTRYINDEX, VSFILTERMOD_LUA_DISABLED_KEY);
+}
+
+bool CMyLua::IsLuaEnabled(lua_State* LuaState)
+{
+    if (!LuaState) {
+        LuaState = L;
+    }
+
+    return LuaState && !IsLuaStateDisabled(LuaState);
+}
+
+void CMyLua::DisableLua(lua_State* LuaState, CString Reason)
+{
+    if (!LuaState) {
+        LuaState = L;
+    }
+
+    if (!Reason.IsEmpty()) {
+        LuaError(Reason);
+    }
+
+    if (!LuaState) {
+        return;
+    }
+
+    if (!IsLuaStateDisabled(LuaState)) {
+        MarkLuaStateDisabled(LuaState);
+        LuaError(L"Lua runtime disabled. Falling back to non-Lua rendering.");
+    }
+}
+
+bool CMyLua::LuaPCall(lua_State* LuaState, int nargs, int nresults, int errfunc, CString Context)
+{
+    if (!LuaState) {
+        LuaState = L;
+    }
+
+    if (!IsLuaEnabled(LuaState)) {
+        return false;
+    }
+
+    if (lua_pcall(LuaState, nargs, nresults, errfunc) != 0) {
+        CString LuaErrorText(lua_tostring(LuaState, -1));
+        lua_pop(LuaState, 1);
+
+        CString ErrorText(L"Lua runtime error");
+        if (!Context.IsEmpty()) {
+            ErrorText += L" (";
+            ErrorText += Context;
+            ErrorText += L")";
+        }
+        if (!LuaErrorText.IsEmpty()) {
+            ErrorText += L": ";
+            ErrorText += LuaErrorText;
+        }
+
+        DisableLua(LuaState, ErrorText);
+        return false;
+    }
+
+    return true;
 }
 
 void CMyLua::LoadLuaFile(CString Filename)
 {
-    CStringA aFilename(Filename);
-    LPSTR pszFilename = aFilename.GetBuffer(Filename.GetLength());
-
-    if(luaL_dofile(L, pszFilename) != 0)
-    {
-        LuaError(CString("Could not load lua: ") + Filename);
-        LuaError(CString(lua_tostring(L, -1)));
+    if (!IsLuaEnabled(L)) {
         return;
     }
 
-    LuaError(CString("Lua script loaded: ") + Filename);
-    if(LuaHasFunction(L, L"init"))
+    CStringA aFilename(Filename);
+    LPCSTR pszFilename = aFilename;
+
+    if (luaL_dofile(L, pszFilename) != 0)
     {
-        if (lua_pcall(L, 0, 0, 0) != 0)
-        {
-            // error
-            CString ErrorText = L"Error: ";
-            CString LuaErrorText(lua_tostring(L, -1));
-            lua_pop(L, 1);
-            LuaError(ErrorText + LuaErrorText);
+        CString LuaErrorText(lua_tostring(L, -1));
+        lua_pop(L, 1);
+
+        CString ErrorText = CString(L"Could not load lua: ") + Filename;
+        if (!LuaErrorText.IsEmpty()) {
+            ErrorText += L": ";
+            ErrorText += LuaErrorText;
         }
+        DisableLua(L, ErrorText);
+        return;
     }
 
-    aFilename.ReleaseBuffer();
+    LuaError(CString(L"Lua script loaded: ") + Filename);
+    if (LuaHasFunction(L, L"init"))
+    {
+        LuaPCall(L, 0, 0, 0, L"init");
+    }
 }
 
 void CMyLua::LuaError(CString Text)
 {
+    if (Text.IsEmpty()) {
+        return;
+    }
+
+    CString DebugText = Text + L"\n";
+    OutputDebugString(DebugText);
+
     if(!LuaLog) return;
 
     LPTSTR pszText = Text.GetBuffer(Text.GetLength());
@@ -1883,6 +1989,10 @@ void CMyLua::LuaAddUserField(lua_State * L, CStringA Field, void * Value)
 
 bool CMyLua::LuaIsNumber(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     bool Result = lua_isnumber(L, -1);
@@ -1892,6 +2002,10 @@ bool CMyLua::LuaIsNumber(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaIsTable(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     bool Result = lua_istable(L, -1);
@@ -1901,6 +2015,10 @@ bool CMyLua::LuaIsTable(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaIsBool(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     bool Result = lua_isboolean(L, -1);
@@ -1910,6 +2028,10 @@ bool CMyLua::LuaIsBool(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaIsString(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     bool Result = lua_isstring(L, -1);
@@ -1920,6 +2042,10 @@ bool CMyLua::LuaIsString(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaIsFunction(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     bool Result = lua_isfunction(L, -1);
@@ -1929,6 +2055,10 @@ bool CMyLua::LuaIsFunction(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaHasFunction(lua_State * L, CString funcname)
 {
+    if (!IsLuaEnabled(L)) {
+        return false;
+    }
+
     CStringA funcnameA(funcname);
     lua_getglobal(L, funcnameA);
     bool Result = lua_isfunction(L, -1);
@@ -1938,6 +2068,10 @@ bool CMyLua::LuaHasFunction(lua_State * L, CString funcname)
 
 int CMyLua::LuaGetInt(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return 0;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     if(!lua_isnumber(L, -1))
@@ -1953,6 +2087,10 @@ int CMyLua::LuaGetInt(lua_State * L, CString fieldname)
 
 double CMyLua::LuaGetFloat(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return 0;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     if(!lua_isnumber(L, -1))
@@ -1968,6 +2106,10 @@ double CMyLua::LuaGetFloat(lua_State * L, CString fieldname)
 
 CString CMyLua::LuaGetString(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return L"";
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     if(!lua_isstring(L, -1))
@@ -1983,6 +2125,10 @@ CString CMyLua::LuaGetString(lua_State * L, CString fieldname)
 
 bool CMyLua::LuaGetBool(lua_State * L, CString fieldname)
 {
+    if (!L) {
+        return false;
+    }
+
     CStringA fieldnameA(fieldname);
     lua_getfield(L, -1, fieldnameA);
     if(!lua_isboolean(L, -1))
@@ -1998,6 +2144,10 @@ bool CMyLua::LuaGetBool(lua_State * L, CString fieldname)
 
 CString CMyLua::CheckLuaHandler(CString func)
 {
+    if (!IsLuaEnabled(L)) {
+        return L"";
+    }
+
     // Custom functions
     if(LuaIsString(L, func))
     {

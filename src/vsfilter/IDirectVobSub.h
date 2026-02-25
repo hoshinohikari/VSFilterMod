@@ -247,6 +247,22 @@ interface IDirectVobSub :
                                     bool fWebLoad,
                                     bool fEmbeddedLoad
                                    ) PURE;
+
+        STDMETHOD(get_SubPictToBuffer)(THIS_
+                                        unsigned int* uSubPictToBuffer
+                                       ) PURE;
+
+        STDMETHOD(put_SubPictToBuffer)(THIS_
+                                        unsigned int uSubPictToBuffer
+                                       ) PURE;
+
+        STDMETHOD(get_AnimWhenBuffering)(THIS_
+                                          bool* fAnimWhenBuffering
+                                         ) PURE;
+
+        STDMETHOD(put_AnimWhenBuffering)(THIS_
+                                          bool fAnimWhenBuffering
+                                         ) PURE;
     };
 
     [uuid("FE6EC6A0-21CA-4970-9EF0-B296F7F38AF0")]
